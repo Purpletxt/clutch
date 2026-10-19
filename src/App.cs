@@ -14,7 +14,7 @@ namespace Clutch
     static class AppInfo
     {
         public const string Name = "Clutch";
-        public const string Version = "1.0.3";
+        public const string Version = "1.0.4";
     }
 
     static class Program
@@ -169,6 +169,7 @@ namespace Clutch
         public bool WelcomeDone = false;
         public bool DiscordStatus = true;
         public bool AutoUpdate = true;
+        public string UpdatedTo = "";
         public string ProbeKey = "";
         public string ProbeResult = "";
 

@@ -55,7 +55,7 @@ namespace Clutch
                 Action finish = delegate
                 {
                     Checking = false; LastCheck = DateTime.Now; LastError = err;
-                    if (err.Length == 0) Available = r != null && Newer(r.Version) ? r : null;
+                    if (err.Length == 0) Available = r != null && Newer(r.Version) && r.Version != Settings.Cur.UpdatedTo ? r : null;
                     if (Changed != null) Changed();
                     if (done != null) done();
                 };
@@ -189,6 +189,7 @@ namespace Clutch
                         Post(delegate { bar.Value = total > 0 ? (float)d / total : 0; status = "Downloading\u2026  " + Library.NiceSize(d) + (total > 0 ? " of " + Library.NiceSize(total) : ""); Invalidate(StatusRect); });
                     }, delegate { return cancelled; });
                     Post(delegate { status = "Installing\u2026"; bar.SetBusy(true); Invalidate(StatusRect); });
+                    Settings.Cur.UpdatedTo = rel.Version; Settings.Save();
                     Updater.Apply(file);
                 }
                 catch (OperationCanceledException) { err = ""; }
