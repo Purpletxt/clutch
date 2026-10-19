@@ -71,17 +71,23 @@ namespace Clutch
             string cpuScale = shrink ? ",scale=" + size + ":flags=fast_bilinear" : "";
             int gop = fps;
             string rate = " -b:v " + kbps + "k -maxrate " + (kbps * 3 / 2) + "k -bufsize " + (kbps * 2) + "k -g " + gop + " -bf 0";
+            string one = "-filter_threads 1 -threads 1 ";
             switch (enc)
             {
                 case "nvenc":
-                    return (zeroCopy && !shrink ? "" : "-vf hwdownload,format=bgra" + cpuScale + (shrink ? ",format=nv12 " : " ")) + "-c:v h264_nvenc -preset p4 -rc vbr" + rate;
+                    return (zeroCopy && !shrink ? "" : one + "-vf hwdownload,format=bgra" + cpuScale + " ") + "-c:v h264_nvenc -preset p4 -rc vbr" + rate;
                 case "amf":
-                    return (zeroCopy && !shrink ? "" : "-vf hwdownload,format=bgra" + cpuScale + ",format=nv12 ") + "-c:v h264_amf -usage transcoding -quality speed -rc vbr_peak" + rate;
+                    return (zeroCopy && !shrink ? "" : one + "-vf hwdownload,format=bgra" + cpuScale + ",format=yuv420p ") + "-c:v h264_amf -usage lowlatency -quality speed -rc vbr_peak -header_spacing " + gop + rate;
                 case "qsv":
-                    return (zeroCopy ? "-vf hwmap=derive_device=qsv,format=qsv" + (shrink ? ",scale_qsv=w=" + out_.Width + ":h=" + out_.Height : "") + " " : "-vf hwdownload,format=bgra" + cpuScale + ",format=nv12 ") + "-c:v h264_qsv -preset veryfast" + rate;
+                    return (zeroCopy ? "-vf hwmap=derive_device=qsv,format=qsv" + (shrink ? ",scale_qsv=w=" + out_.Width + ":h=" + out_.Height : "") + " " : one + "-vf hwdownload,format=bgra" + cpuScale + ",format=nv12 ") + "-c:v h264_qsv -preset veryfast" + rate;
                 default:
-                    return "-vf hwdownload,format=bgra" + cpuScale + ",format=yuv420p -c:v libx264 -preset superfast -tune zerolatency" + rate;
+                    return "-filter_threads 1 -vf hwdownload,format=bgra" + cpuScale + ",format=yuv420p -c:v libx264 -preset superfast -tune zerolatency -threads 2" + rate;
             }
+        }
+
+        public static bool UsesCpu(string enc, bool zeroCopy, bool shrink)
+        {
+            return enc == "x264" || shrink || !zeroCopy && enc != "nvenc";
         }
 
         public static string FileArgs(string enc)

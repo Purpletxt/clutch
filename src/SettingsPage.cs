@@ -280,6 +280,8 @@ namespace Clutch
             SetDesc(rMemory, "About " + mb + " MB of RAM for " + s.BufferSeconds + " s at " + (kbps / 1000.0).ToString("0.#") + " Mbps. Nothing is written to disk until you save a clip.");
             string inUse = Recorder.EncoderUsed.Length > 0 ? Recorder.EncoderUsed : s.ProbeResult;
             string enc = "Your graphics: " + Encoder.GpuSummary() + "." + (inUse.Length > 0 ? " In use: " + Encoder.Label(inUse.Split(':')[0]) + (inUse.EndsWith(":1") ? " (frames stay on the GPU)." : ".") : "");
+            if (inUse.Length > 0 && Encoder.UsesCpu(inUse.Split(':')[0], inUse.EndsWith(":1"), s.Resolution != 0))
+                enc += " Each frame goes through your CPU, so for the smallest hit to game FPS use 30 fps.";
             SetDesc(rEncoder, enc);
             if ((DateTime.Now - freeAt).TotalSeconds > 10)
             try { freeAt = DateTime.Now; free = "  \u00B7  " + (new DriveInfo(Path.GetPathRoot(s.Folder)).AvailableFreeSpace >> 30) + " GB free"; } catch { }

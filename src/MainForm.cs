@@ -33,6 +33,7 @@ namespace Clutch
         NotifyIcon tray; ToolStripMenuItem trayToggle, traySave, trayUpdate;
         readonly System.Windows.Forms.Timer gameTimer = new System.Windows.Forms.Timer(), uiTimer = new System.Windows.Forms.Timer();
         bool quitting, closing, saving, lastWant, checkingGames;
+        int gameMisses;
         public bool CapturingHotkey;
         Icon iconOn, iconOff;
 
@@ -196,7 +197,10 @@ namespace Clutch
             if (checkingGames) return; checkingGames = true;
             ThreadPool.QueueUserWorkItem(delegate
             {
+                string before = Games.Running, beforeExe = Games.RunningExe;
                 try { Games.Check(); } catch { }
+                if (Games.Running.Length > 0) gameMisses = 0;
+                else if (before.Length > 0 && ++gameMisses < 2) { Games.Running = before; Games.RunningExe = beforeExe; }
                 try { BeginInvoke((MethodInvoker)delegate { checkingGames = false; Sync(); }); } catch { }
             });
         }

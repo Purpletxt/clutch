@@ -36,6 +36,7 @@ namespace Clutch
         static readonly Stack<byte[]> pool = new Stack<byte[]>();
         static int saveHold;
         static int restarts;
+        static DateTime launchedAt;
         static readonly System.Text.StringBuilder errTail = new System.Text.StringBuilder();
 
         public static long BytesHeld { get { return bytesHeld; } }
@@ -134,7 +135,8 @@ namespace Clutch
             };
             p.Start();
             FFmpeg.Track(p);
-            try { p.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
+            try { p.PriorityClass = Encoder.UsesCpu(parts[0], parts.Length > 1 && parts[1] == "1", !outSize.IsEmpty) ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal; } catch { }
+            launchedAt = DateTime.Now;
             p.BeginErrorReadLine();
             proc = p;
             reader = new Thread(delegate () { ReadLoop(p); }); reader.IsBackground = true; reader.Name = "TS reader"; reader.Start();
@@ -188,7 +190,7 @@ namespace Clutch
                         pos += 188;
                     }
                     if (pos > 0) { Buffer.BlockCopy(buf, pos, buf, 0, have - pos); have -= pos; }
-                    if (!announced && lastPts >= 0) { announced = true; restarts = 0; Fire(State.Recording, "Recording"); }
+                    if (!announced && lastPts >= 0) { announced = true; Fire(State.Recording, "Recording"); }
                 }
             }
             catch (Exception ex) { if (proc == p) Log.Error("TS reader", ex); }
@@ -199,10 +201,11 @@ namespace Clutch
                 Log.Error("Recorder", "FFmpeg stopped: " + Encoder.Short(tail));
                 proc = null;
                 try { p.Dispose(); } catch { }
+                if ((DateTime.Now - launchedAt).TotalSeconds > 60) restarts = 0;
                 if (restarts++ < 5)
                 {
                     Fire(State.Starting, "Reconnecting\u2026");
-                    Thread.Sleep(1000 + 1000 * restarts);
+                    Thread.Sleep(2000 * restarts * restarts);
                     if (wantRunning && proc == null) { if (restarts == 3) EncoderUsed = ""; try { if (EncoderUsed == "") StartWorker(); else Launch(); } catch (Exception ex) { Log.Error("Recorder restart", ex); } }
                 }
                 else Fire(State.Error, "Screen capture keeps stopping. See the error log.");
@@ -274,6 +277,13 @@ namespace Clutch
 
         public class SaveResult { public bool Ok; public string Path, Error; public double Seconds; }
 
+        static string Details(FFmpeg.Result r, long tsBytes, int pieces, double seconds)
+        {
+            string err = Encoder.Short(r.Err);
+            return "exit " + (r.TimedOut ? "timed out" : r.Exit + " (0x" + r.Exit.ToString("X8") + ")") + ", " + (tsBytes >> 20) + " MB in " + pieces + " pieces, "
+                + seconds.ToString("0.0") + " s, encoder " + (EncoderUsed.Length > 0 ? EncoderUsed : "none") + (err.Length > 0 ? ": " + err : ", ffmpeg printed nothing");
+        }
+
         public static SaveResult Save(int seconds, string game)
         {
             SaveResult res = new SaveResult();
@@ -315,7 +325,7 @@ namespace Clutch
                 string outPath = Library.UniquePath(Path.Combine(Settings.Cur.Folder, name + ".mp4"));
                 string part = outPath + ".part";
 
-                string args = "-y -hide_banner -loglevel error -fflags +genpts -i " + FFmpeg.Q(ts);
+                string args = "-y -hide_banner -loglevel warning -fflags +genpts -i " + FFmpeg.Q(ts);
                 if (wavD != null) args += " -i " + FFmpeg.Q(wavD);
                 if (wavM != null) args += " -i " + FFmpeg.Q(wavM);
                 args += " -map 0:v:0 -c:v copy";
@@ -331,8 +341,32 @@ namespace Clutch
                 else if (wavM != null) args += " -map 1:a -c:a aac -b:a 160k -metadata:s:a:0 handler_name=Mic";
                 args += " -metadata comment=\"Saved with Clutch\" -movflags +faststart -f mp4 " + FFmpeg.Q(part);
 
-                FFmpeg.Result r = FFmpeg.Run(FFmpeg.Exe, args, 60000, null);
-                if (r.Exit != 0 || !File.Exists(part)) { res.Error = "Couldn't save the clip."; Log.Error("Save clip", Encoder.Short(r.Err)); try { File.Delete(part); } catch { } return res; }
+                long tsBytes = new FileInfo(ts).Length;
+                int timeout = (int)Math.Min(600000, 60000 + tsBytes / 1000);
+                FFmpeg.Result r = FFmpeg.Run(FFmpeg.Exe, args, timeout, null);
+                if (r.Exit != 0 || !File.Exists(part))
+                {
+                    Log.Error("Save clip", Details(r, tsBytes, pick.Count, res.Seconds));
+                    try { File.Delete(part); } catch { }
+                    string enc = (EncoderUsed.Length > 0 ? EncoderUsed : "x264").Split(':')[0];
+                    int kbps = Math.Max(4000, (int)(tsBytes * 8 / 1000 / Math.Max(1, res.Seconds)));
+                    string again = args.Replace(" -c:v copy", " " + Encoder.FileArgs(enc) + " -b:v " + kbps + "k");
+                    r = FFmpeg.Run(FFmpeg.Exe, again, Math.Max(timeout, 300000), null);
+                    if ((r.Exit != 0 || !File.Exists(part)) && enc != "x264")
+                    {
+                        Log.Error("Save clip", "re-encode with " + enc + " failed. " + Details(r, tsBytes, pick.Count, res.Seconds));
+                        try { File.Delete(part); } catch { }
+                        r = FFmpeg.Run(FFmpeg.Exe, again.Replace(Encoder.FileArgs(enc), Encoder.FileArgs("x264")), Math.Max(timeout, 300000), null);
+                    }
+                    if (r.Exit != 0 || !File.Exists(part))
+                    {
+                        Log.Error("Save clip", "re-encode failed too. " + Details(r, tsBytes, pick.Count, res.Seconds));
+                        res.Error = "Couldn't save the clip. Settings > General > Report a problem has the details.";
+                        try { File.Delete(part); } catch { }
+                        return res;
+                    }
+                    Log.Info("Save clip", "saved by re-encoding instead of copying");
+                }
                 File.Move(part, outPath);
                 res.Ok = true; res.Path = outPath;
             }
