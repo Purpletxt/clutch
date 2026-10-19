@@ -1,0 +1,98 @@
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+namespace Clutch
+{
+    static class ClipKey
+    {
+        static IntPtr hook;
+        static Native.HookProc proc;
+        static MainForm main;
+        static bool down, paused, fallbackOn;
+        static Timer watch;
+        static int lastPid = -1;
+        static readonly bool selfElevated = IsElevated(Process.GetCurrentProcess().Id);
+
+        public static void Start(MainForm m)
+        {
+            main = m; paused = false;
+            if (Program.DevRun || !m.IsHandleCreated) return;
+            if (hook == IntPtr.Zero)
+            {
+                proc = Hook;
+                hook = Native.SetWindowsHookEx(13, proc, Native.GetModuleHandle(null), 0);
+                if (hook == IntPtr.Zero) Log.Error("Clip key", "Keyboard hook failed (" + Marshal.GetLastWin32Error() + "); using a regular hotkey instead.");
+            }
+            if (watch == null) { watch = new Timer(); watch.Interval = 1000; watch.Tick += delegate { CheckForeground(); }; watch.Start(); }
+            SetFallback(false); lastPid = -1; CheckForeground();
+        }
+
+        public static void Pause() { paused = true; SetFallback(false); }
+
+        public static void Stop()
+        {
+            if (watch != null) { watch.Stop(); watch.Dispose(); watch = null; }
+            SetFallback(false);
+            if (hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+        }
+
+        static IntPtr Hook(int code, IntPtr w, IntPtr l)
+        {
+            if (code >= 0 && !paused && main != null)
+            {
+                int msg = w.ToInt32(), vk = Marshal.ReadInt32(l);
+                if (vk == Settings.Cur.HotkeyVk)
+                {
+                    bool isDown = msg == 0x100 || msg == 0x104;
+                    if (isDown && !down)
+                    {
+                        down = true;
+                        if (!fallbackOn && HeldMods() == Settings.Cur.HotkeyMods)
+                            try { main.BeginInvoke((MethodInvoker)main.SaveClip); } catch { }
+                    }
+                    else if (!isDown) down = false;
+                }
+            }
+            return Native.CallNextHookEx(hook, code, w, l);
+        }
+
+        static bool Held(int vk) { return (Native.GetAsyncKeyState(vk) & 0x8000) != 0; }
+        static int HeldMods()
+        {
+            return (Held(0x12) ? 1 : 0) | (Held(0x11) ? 2 : 0) | (Held(0x10) ? 4 : 0) | (Held(0x5B) || Held(0x5C) ? 8 : 0);
+        }
+
+        static void CheckForeground()
+        {
+            if (paused || main == null) return;
+            if (hook == IntPtr.Zero) { SetFallback(true); return; }
+            int pid; Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out pid);
+            if (pid == lastPid) return;
+            lastPid = pid;
+            SetFallback(!selfElevated && pid != 0 && IsElevated(pid));
+        }
+
+        static void SetFallback(bool on)
+        {
+            if (main == null || !main.IsHandleCreated || on == fallbackOn) return;
+            if (on) fallbackOn = Native.RegisterHotKey(main.Handle, 1, (uint)Settings.Cur.HotkeyMods | Native.MOD_NOREPEAT, (uint)Settings.Cur.HotkeyVk);
+            else { Native.UnregisterHotKey(main.Handle, 1); fallbackOn = false; }
+        }
+
+        static bool IsElevated(int pid)
+        {
+            IntPtr h = Native.OpenProcess(0x1000, false, pid);
+            if (h == IntPtr.Zero) return true;
+            try
+            {
+                IntPtr tok;
+                if (!Native.OpenProcessToken(h, 8, out tok)) return true;
+                try { int elev, len; return !Native.GetTokenInformation(tok, 20, out elev, 4, out len) || elev != 0; }
+                finally { Native.CloseHandle(tok); }
+            }
+            finally { Native.CloseHandle(h); }
+        }
+    }
+}
