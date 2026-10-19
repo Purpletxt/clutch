@@ -259,18 +259,46 @@ namespace Clutch
 
         public static string Check()
         {
-            string found = "";
-            if (Settings.Cur.Games.Count == 0) { Running = RunningExe = ""; return ""; }
+            string found = ""; int pid = 0;
+            if (Settings.Cur.Games.Count == 0) { Running = RunningExe = ""; RunningPid = 0; return ""; }
             string exe = "";
             HashSet<string> want = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (GameEntry g in Settings.Cur.Games) want.Add(Path.GetFileNameWithoutExtension(g.Exe));
             foreach (Process p in Process.GetProcesses())
             {
-                try { if (found == "" && want.Contains(p.ProcessName)) { found = NameFor(p.ProcessName); exe = p.ProcessName + ".exe"; GameIcons.Remember(found, ExePath(p.Id)); } }
+                try { if (found == "" && want.Contains(p.ProcessName)) { found = NameFor(p.ProcessName); exe = p.ProcessName + ".exe"; pid = p.Id; GameIcons.Remember(found, ExePath(p.Id)); } }
                 catch { }
                 p.Dispose();
             }
-            Running = found; RunningExe = exe; return found;
+            Running = found; RunningExe = exe; RunningPid = pid; return found;
+        }
+
+        public static int RunningPid;
+
+        public static Rectangle? WindowArea()
+        {
+            IntPtr fg = Native.GetForegroundWindow(); int fpid; Native.GetWindowThreadProcessId(fg, out fpid);
+            IntPtr h = IntPtr.Zero;
+            if (RunningPid != 0)
+            {
+                if (fpid == RunningPid) h = fg;
+                else try { using (Process p = Process.GetProcessById(RunningPid)) h = p.MainWindowHandle; } catch { }
+                if (h == IntPtr.Zero) return null;
+                if (Native.IsIconic(h) || !Native.IsWindowVisible(h)) return null;
+                Rectangle r = ClientArea(h);
+                return r.Width < 160 || r.Height < 120 ? (Rectangle?)null : r;
+            }
+            if (fg == IntPtr.Zero || fpid == Process.GetCurrentProcess().Id) return Rectangle.Empty;
+            Rectangle f = ClientArea(fg);
+            foreach (System.Windows.Forms.Screen sc in System.Windows.Forms.Screen.AllScreens) if (f == sc.Bounds) return f;
+            return Rectangle.Empty;
+        }
+
+        static Rectangle ClientArea(IntPtr h)
+        {
+            Native.RECT c; if (!Native.GetClientRect(h, out c)) return Rectangle.Empty;
+            Native.POINT o = new Native.POINT(0, 0); Native.ClientToScreen(h, ref o);
+            return new Rectangle(o.X, o.Y, c.Right - c.Left, c.Bottom - c.Top);
         }
 
         static string NameFor(string proc)

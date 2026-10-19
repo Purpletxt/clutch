@@ -118,9 +118,12 @@ namespace Clutch
             Settings s = Settings.Cur;
             string[] parts = EncoderUsed.Split(':');
             fps = s.Fps; keepSeconds = s.BufferSeconds + 2;
-            Size outSize = OutputSize(); Rectangle b = MonitorBounds(s.Monitor);
-            int kbps = outSize.IsEmpty ? Bitrate(b.Width, b.Height, fps, s.Quality) : Bitrate(outSize.Width, outSize.Height, fps, s.Quality);
-            string args = "-hide_banner -loglevel error -nostats -f lavfi -i ddagrab=output_idx=" + s.Monitor + ":framerate=" + fps + ":draw_mouse=1 "
+            int mon; Rectangle b, cap; CaptureRect(out mon, out b, out cap);
+            Captured = cap;
+            Size outSize = OutputSize(); Size src = outSize.IsEmpty ? cap.Size : outSize;
+            int kbps = Bitrate(src.Width, src.Height, fps, s.Quality);
+            string region = cap == b ? "" : ":offset_x=" + (cap.X - b.X) + ":offset_y=" + (cap.Y - b.Y) + ":video_size=" + cap.Width + "x" + cap.Height;
+            string args = "-hide_banner -loglevel error -nostats -f lavfi -i ddagrab=output_idx=" + mon + region + ":framerate=" + fps + ":draw_mouse=1 "
                         + Encoder.Args(parts[0], parts.Length > 1 && parts[1] == "1", fps, kbps, outSize)
                         + " -flags +global_header -bsf:v dump_extra=freq=keyframe -an -f mpegts -mpegts_start_pid 256 -mpegts_pmt_start_pid 4096 -muxdelay 0 -muxpreload 0 -flush_packets 1 pipe:1";
             lock (gate) { foreach (Chunk c in chunks) Recycle(c); chunks.Clear(); bytesHeld = 0; lastPts = -1; wrapAdd = 0; minOffset = double.MaxValue; pat = pmt = null; }
@@ -152,10 +155,52 @@ namespace Clutch
             return ordered[Math.Max(0, Math.Min(ordered.Count - 1, index))].Bounds;
         }
 
+        public static Rectangle Area = Rectangle.Empty, Captured = Rectangle.Empty;
+        public static bool RegionBroken;
+
+        static int MonitorCount { get { return Screen.AllScreens.Length; } }
+
+        public static int MonitorFor(Rectangle r)
+        {
+            Point c = new Point(r.X + r.Width / 2, r.Y + r.Height / 2);
+            for (int i = 0; i < MonitorCount; i++) if (MonitorBounds(i).Contains(c)) return i;
+            return -1;
+        }
+
+        static void CaptureRect(out int mon, out Rectangle bounds, out Rectangle cap)
+        {
+            mon = Settings.Cur.Monitor; bounds = MonitorBounds(mon); cap = bounds;
+            if (Settings.Cur.CaptureMode != 0 || Area.IsEmpty || RegionBroken) return;
+            int m = MonitorFor(Area); if (m < 0) return;
+            Rectangle b = MonitorBounds(m), a = Rectangle.Intersect(Area, b);
+            a.Width &= ~1; a.Height &= ~1;
+            if (a.Width < 160 || a.Height < 120) return;
+            mon = m; bounds = b; cap = a;
+        }
+
+#if DEV
+        public static string DescribeCapture() { int m; Rectangle b, c; CaptureRect(out m, out b, out c); return "monitor " + m + " " + b + " capture " + c + (c == b ? " (whole monitor)" : " offset " + (c.X - b.X) + "," + (c.Y - b.Y)); }
+#endif
+
+        public static void Relaunch()
+        {
+            if (!wantRunning || proc == null || EncoderUsed == "") return;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                lock (relaunchGate)
+                {
+                    if (!wantRunning || proc == null) return;
+                    KillProcess();
+                    try { if (wantRunning) Launch(); } catch (Exception ex) { Log.Error("Recorder relaunch", ex); }
+                }
+            });
+        }
+        static readonly object relaunchGate = new object();
+
         public static Size OutputSize()
         {
             int h = Settings.Cur.Resolution == 1 ? 1080 : Settings.Cur.Resolution == 2 ? 720 : 0;
-            Rectangle b = MonitorBounds(Settings.Cur.Monitor);
+            Rectangle b = Captured.IsEmpty ? MonitorBounds(Settings.Cur.Monitor) : Captured;
             if (h == 0 || b.Height <= h) return Size.Empty;
             int w = (int)Math.Round(b.Width * (double)h / b.Height / 2) * 2;
             return new Size(w, h);
@@ -201,6 +246,11 @@ namespace Clutch
                 Log.Error("Recorder", "FFmpeg stopped: " + Encoder.Short(tail));
                 proc = null;
                 try { p.Dispose(); } catch { }
+                if (!RegionBroken && Captured != MonitorBounds(Settings.Cur.Monitor) && (DateTime.Now - launchedAt).TotalSeconds < 10)
+                {
+                    RegionBroken = true; Area = Rectangle.Empty;
+                    Log.Info("Recorder", "Game window capture failed on this setup, recording the whole screen instead");
+                }
                 if ((DateTime.Now - launchedAt).TotalSeconds > 60) restarts = 0;
                 if (restarts++ < 5)
                 {

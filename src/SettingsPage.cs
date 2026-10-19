@@ -68,7 +68,7 @@ namespace Clutch
 
         Toggle tEnabled, tDesktop, tMic, tGamesOnly, tStartup, tTray, tOverlay, tSound, tDiscord, tUpdate;
         OverlayPicker pOverlay;
-        Seg sLength, sFps, sQuality, sRes; Drop dMonitor, dEncoder, dDesktop, dMic; Btn bHotkey, bFfmpeg, bFolder, bOpenFolder, bLog, bAddApp, bBrowse, bUpdate, bReport;
+        Seg sLength, sFps, sQuality, sRes, sCapture; Drop dMonitor, dEncoder, dDesktop, dMic; Btn bHotkey, bFfmpeg, bFolder, bOpenFolder, bLog, bAddApp, bBrowse, bUpdate, bReport;
         Slider micVol; Meter mDesktop, mMic;
         Row rMemory, rRes, rEncoder, rFfmpeg, rFolder, rDesktopDev, rMicDev, rMicVol, rHotkey, rUpdate;
         Card gamesCard;
@@ -106,7 +106,10 @@ namespace Clutch
             rRes = AddRow(c, "Recording resolution", "", sRes, 300);
             dMonitor = new Drop();
             dMonitor.Changed += delegate { if (loading) return; s.Monitor = dMonitor.Index; Changed(true); };
-            AddRow(c, "Screen", "Which monitor to record.", dMonitor, 300).Icon = Glyph.Monitor;
+            sCapture = new Seg(new[] { "Game window", "Whole screen" });
+            sCapture.Changed += delegate { if (loading) return; s.CaptureMode = sCapture.Index; Settings.Save(); Recorder.Area = Rectangle.Empty; Recorder.Relaunch(); };
+            AddRow(c, "What to record", "Game window records just your game, on whichever screen it's on, and follows it if you move it. Whole screen records the screen below.", sCapture, 300).Icon = Glyph.Game;
+            AddRow(c, "Screen", "Which monitor to record when no game is open, or with Whole screen.", dMonitor, 300).Icon = Glyph.Monitor;
             dEncoder = new Drop(); dEncoder.Items.AddRange(new[] { "Automatic (recommended)", "NVIDIA NVENC", "AMD AMF", "Intel Quick Sync", "Software (CPU)" });
             dEncoder.Changed += delegate { if (loading) return; s.Encoder = Encoders[dEncoder.Index]; Changed(true); };
             rEncoder = AddRow(c, "Encoder", "", dEncoder, 300);
@@ -224,7 +227,7 @@ namespace Clutch
             loading = true; Settings s = Settings.Cur;
             tEnabled.Set(s.Enabled);
             sLength.Set(Math.Max(0, Array.IndexOf(Lengths, s.BufferSeconds)));
-            sFps.Set(s.Fps == 30 ? 0 : 1); sQuality.Set(s.Quality); sRes.Set(s.Resolution);
+            sFps.Set(s.Fps == 30 ? 0 : 1); sQuality.Set(s.Quality); sRes.Set(s.Resolution); sCapture.Set(s.CaptureMode);
             dEncoder.Index = Math.Max(0, Array.IndexOf(Encoders, s.Encoder));
             tDesktop.Set(s.DesktopAudio); tMic.Set(s.Mic); micVol.Value = s.MicVolume;
             tGamesOnly.Set(s.GamesOnly);

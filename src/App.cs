@@ -14,7 +14,7 @@ namespace Clutch
     static class AppInfo
     {
         public const string Name = "Clutch";
-        public const string Version = "1.0.2";
+        public const string Version = "1.0.3";
     }
 
     static class Program
@@ -150,6 +150,7 @@ namespace Clutch
         public int Quality = 1;
         public int Resolution = 0;
         public int Monitor = 0;
+        public int CaptureMode = 0;
         public string Encoder = "auto";
         public int HotkeyVk = 0x77;
         public int HotkeyMods = 0;

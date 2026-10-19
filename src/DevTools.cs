@@ -62,6 +62,28 @@ namespace Clutch
                 return true;
             }
             if (args.Length == 3 && args[0] == "--keycheck") { Paths.Init(); File.WriteAllText(args[2], "pc " + Licence.PcCode + "\r\nresult " + Licence.Check(File.ReadAllText(args[1]).Trim()) + "\r\n" + Licence.Explain(File.ReadAllText(args[1]).Trim())); return true; }
+            if (args.Length == 2 && args[0] == "--areatest")
+            {
+                Paths.Init(); Settings.Load(); Settings.Cur.CaptureMode = 0;
+                Form f = new Form(); f.Text = "Clutch area test"; f.StartPosition = FormStartPosition.Manual; f.Location = new Point(211, 157); f.ClientSize = new Size(801, 601);
+                f.Shown += delegate
+                {
+                    Timer t = new Timer(); t.Interval = 800;
+                    t.Tick += delegate
+                    {
+                        t.Stop();
+                        Games.RunningPid = System.Diagnostics.Process.GetCurrentProcess().Id;
+                        Rectangle? a = Games.WindowArea();
+                        string r = "window area " + (a.HasValue ? a.Value.ToString() : "none") + "\r\n";
+                        Recorder.Area = a ?? Rectangle.Empty; r += "game window: " + Recorder.DescribeCapture() + "\r\n";
+                        Settings.Cur.CaptureMode = 1; r += "whole screen: " + Recorder.DescribeCapture() + "\r\n";
+                        Settings.Cur.CaptureMode = 0; Recorder.Area = Screen.PrimaryScreen.Bounds; r += "fullscreen game: " + Recorder.DescribeCapture() + "\r\n";
+                        File.WriteAllText(args[1], r); f.Close();
+                    };
+                    t.Start();
+                };
+                Application.Run(f); return true;
+            }
             if (args.Length == 1 && args[0] == "--crashtest")
             {
                 Paths.Init(); Settings.Load(); Ui.Init(); Crash.Hook(); Application.EnableVisualStyles();

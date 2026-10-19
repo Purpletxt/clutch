@@ -193,16 +193,36 @@ namespace Clutch
 
         void CheckGames()
         {
-            if (Settings.Cur.Games.Count == 0) { Games.Running = Games.RunningExe = ""; Sync(); return; }
             if (checkingGames) return; checkingGames = true;
             ThreadPool.QueueUserWorkItem(delegate
             {
-                string before = Games.Running, beforeExe = Games.RunningExe;
+                string before = Games.Running, beforeExe = Games.RunningExe; int beforePid = Games.RunningPid;
                 try { Games.Check(); } catch { }
                 if (Games.Running.Length > 0) gameMisses = 0;
-                else if (before.Length > 0 && ++gameMisses < 2) { Games.Running = before; Games.RunningExe = beforeExe; }
-                try { BeginInvoke((MethodInvoker)delegate { checkingGames = false; Sync(); }); } catch { }
+                else if (before.Length > 0 && ++gameMisses < 2) { Games.Running = before; Games.RunningExe = beforeExe; Games.RunningPid = beforePid; }
+                Rectangle? area = null;
+                try { area = Games.WindowArea(); } catch { }
+                try { BeginInvoke((MethodInvoker)delegate { checkingGames = false; Sync(); Follow(area); }); } catch { }
             });
+        }
+
+        Rectangle pendingArea = Rectangle.Empty; int pendingSeen;
+        void Follow(Rectangle? seen)
+        {
+            if (!seen.HasValue || Settings.Cur.CaptureMode != 0 || Recorder.RegionBroken) return;
+            Rectangle a = seen.Value;
+            if (Near(a, Recorder.Area)) { pendingSeen = 0; return; }
+            if (Near(a, pendingArea)) pendingSeen++; else { pendingArea = a; pendingSeen = 1; }
+            if (pendingSeen < 2) return;
+            pendingSeen = 0;
+            Recorder.Area = a;
+            Recorder.Relaunch();
+        }
+
+        static bool Near(Rectangle a, Rectangle b)
+        {
+            if (a.IsEmpty || b.IsEmpty) return a.IsEmpty && b.IsEmpty;
+            return Math.Abs(a.X - b.X) <= 8 && Math.Abs(a.Y - b.Y) <= 8 && Math.Abs(a.Width - b.Width) <= 8 && Math.Abs(a.Height - b.Height) <= 8;
         }
 
         public bool WantRecording { get { return FFmpeg.Ready && Settings.Cur.Enabled && (!Settings.Cur.GamesOnly || Games.Running != ""); } }
@@ -265,7 +285,8 @@ namespace Clutch
 
         public void SaveClip()
         {
-            Rectangle screen = Recorder.MonitorBounds(Settings.Cur.Monitor);
+            int gm = Recorder.Captured.IsEmpty ? -1 : Recorder.MonitorFor(Recorder.Captured);
+            Rectangle screen = Recorder.MonitorBounds(gm >= 0 ? gm : Settings.Cur.Monitor);
             if (saving) return;
             if (Recorder.Now != Recorder.State.Recording)
             {
@@ -277,6 +298,9 @@ namespace Clutch
             saving = true;
             string game = Games.ForClip();
             int seconds = Settings.Cur.BufferSeconds;
+            double held = Math.Min(seconds, Recorder.SecondsHeld);
+            if (Settings.Cur.Overlay) SavedOverlay.Pop("Clipped!", "Clipped " + (game.Length > 0 ? game + "  \u00B7  " : "") + Math.Max(1, Math.Round(held)) + "s", true, screen);
+            if (Settings.Cur.SaveSound) Sfx.Saved();
             ThreadPool.QueueUserWorkItem(delegate
             {
                 Recorder.SaveResult r = Recorder.Save(seconds, game);
@@ -288,9 +312,6 @@ namespace Clutch
                         if (r.Ok)
                         {
                             Clip c = Library.Add(r.Path, game, r.Seconds);
-                            string detail = "Clipped " + (game.Length > 0 ? game + "  \u00B7  " : "") + Math.Round(r.Seconds) + "s";
-                            if (Settings.Cur.Overlay) SavedOverlay.Pop("Clipped!", detail, true, screen);
-                            if (Settings.Cur.SaveSound) Sfx.Saved();
                             Toast.Show(Glyph.Check, "Saved \"" + c.Title + "\"", "Open", delegate { OpenClip(c); }, 4000);
                         }
                         else
