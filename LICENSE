@@ -1,0 +1,20 @@
+Copyright (c) 2026 Purpletxt. All rights reserved.
+
+Clutch is in an invite-only beta. The source code is published so people can
+see how it works and check what it does on their PC.
+
+You may:
+- read and review the source code
+- use an official Clutch release you were invited to, on your own PC
+
+You may not, without written permission:
+- copy, modify, redistribute or publish Clutch, its source code or builds of it
+- remove or bypass the invite check
+- use the Clutch name or logo for anything else
+
+Clutch is provided "as is", without warranty of any kind. In no event shall the
+author be liable for any claim, damages or other liability arising from the use
+of Clutch.
+
+FFmpeg, which Clutch downloads separately, is not covered by this licence. It is
+licensed under the GNU General Public License version 3: see https://ffmpeg.org.
