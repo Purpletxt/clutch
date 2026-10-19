@@ -1,4 +1,9 @@
-# Clutch
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
+    <img src="assets/banner-light.png" alt="Clutch" width="460">
+  </picture>
+</p>
 
 A light, local-only game clipping app for Windows. Clutch keeps the last moments of your game in memory, and saves them as a clip the instant you press your clip key.
 
