@@ -351,7 +351,7 @@ namespace Clutch
                 return r.Width < 160 || r.Height < 120 ? (Rectangle?)null : r;
             }
             if (pid == Self) return null;
-            if (Fullscreen(fg)) { try { using (Process p = Process.GetProcessById(pid)) if (p.ProcessName == "explorer") return null; } catch { } return ClientArea(fg); }
+            if (Fullscreen(fg)) { try { using (Process p = Process.GetProcessById(pid)) if (IsWindowsTool(p)) return null; } catch { return null; } return ClientArea(fg); }
             return null;
         }
 
@@ -401,9 +401,9 @@ namespace Clutch
                     using (Process p = Process.GetProcessById(pid))
                     {
                         string known = GameName(p);
-                        if (known != null || p.ProcessName != "explorer" && Fullscreen(fg))
+                        if (known != null)
                         {
-                            Current = known ?? Friendly(p); CurrentExe = p.ProcessName + ".exe"; currentPid = pid;
+                            Current = known; CurrentExe = p.ProcessName + ".exe"; currentPid = pid;
                             GameIcons.Remember(Current, ExePath(pid));
                             return;
                         }
@@ -426,7 +426,7 @@ namespace Clutch
                     {
                         string known = GameName(p);
                         if (known != null) { GameIcons.Remember(known, ExePath(p.Id)); return known; }
-                        if (p.ProcessName != "explorer")
+                        if (!IsWindowsTool(p))
                         {
                             front = Friendly(p);
                             if (Fullscreen(fg)) { GameIcons.Remember(front, ExePath(p.Id)); return front; }
@@ -442,6 +442,7 @@ namespace Clutch
         public static string Clean(string name)
         {
             string n = (name ?? "").Trim();
+            if (n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && n.Length > 4) n = n.Substring(0, n.Length - 4);
             string[] tails = { " (64-bit)", " (32-bit)", " 64-bit", " x64", " Game Client", " Client", " Launcher", " Application" };
             for (bool again = true; again; )
             {
@@ -451,6 +452,12 @@ namespace Clutch
             }
             return n;
         }
+
+        static readonly HashSet<string> WindowsTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "explorer", "SnippingTool", "ScreenClippingHost", "ShellExperienceHost", "StartMenuExperienceHost", "SearchHost", "SearchApp", "TextInputHost",
+          "LockApp", "ApplicationFrameHost", "SystemSettings", "Taskmgr", "dwm", "ShareX", "Lightshot", "Greenshot", "obs64", "obs32", "Clutch" };
+
+        public static bool IsWindowsTool(Process p) { try { return WindowsTools.Contains(p.ProcessName); } catch { return true; } }
 
         public static string Friendly(Process p)
         {

@@ -123,6 +123,7 @@ namespace Clutch
             Size outSize = OutputSize(); Size src = outSize.IsEmpty ? cap.Size : outSize;
             int kbps = Bitrate(src.Width, src.Height, fps, s.Quality);
             string region = cap == b ? "" : ":offset_x=" + (cap.X - b.X) + ":offset_y=" + (cap.Y - b.Y) + ":video_size=" + cap.Width + "x" + cap.Height;
+            usedRegion = region.Length > 0;
             string args = "-hide_banner -loglevel error -nostats -f lavfi -i ddagrab=output_idx=" + mon + region + ":framerate=" + fps + ":draw_mouse=1 "
                         + Encoder.Args(parts[0], parts.Length > 1 && parts[1] == "1", fps, kbps, outSize)
                         + " -flags +global_header -bsf:v dump_extra=freq=keyframe -an -f mpegts -mpegts_start_pid 256 -mpegts_pmt_start_pid 4096 -muxdelay 0 -muxpreload 0 -flush_packets 1 pipe:1";
@@ -157,6 +158,7 @@ namespace Clutch
 
         public static Rectangle Area = Rectangle.Empty, Captured = Rectangle.Empty;
         public static bool RegionBroken;
+        static bool usedRegion;
 
         static int MonitorCount { get { return Screen.AllScreens.Length; } }
 
@@ -243,13 +245,13 @@ namespace Clutch
             if (proc == p && wantRunning)
             {
                 string tail; lock (errTail) tail = errTail.ToString();
-                Log.Error("Recorder", "FFmpeg stopped: " + Encoder.Short(tail));
+                Log.Error("Recorder", "FFmpeg stopped (capturing " + Captured.Width + "x" + Captured.Height + " at " + Captured.X + "," + Captured.Y + " of monitor " + MonitorBounds(Settings.Cur.Monitor) + "): " + Encoder.Short(tail));
                 proc = null;
                 try { p.Dispose(); } catch { }
-                if (!RegionBroken && Captured != MonitorBounds(Settings.Cur.Monitor) && (DateTime.Now - launchedAt).TotalSeconds < 10)
+                if (!RegionBroken && usedRegion && (DateTime.Now - launchedAt).TotalSeconds < 10)
                 {
                     RegionBroken = true; Area = Rectangle.Empty;
-                    Log.Info("Recorder", "Game window capture failed on this setup, recording the whole screen instead");
+                    Log.Info("Recorder", "Game window capture failed on this setup (area " + Captured + "), recording the whole screen instead");
                 }
                 if ((DateTime.Now - launchedAt).TotalSeconds > 60) restarts = 0;
                 if (restarts++ < 5)

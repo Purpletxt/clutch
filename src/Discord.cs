@@ -47,7 +47,7 @@ namespace Clutch
                 try
                 {
                     if (pipe == null && game.Length > 0) { pipe = Connect(); shown = null; }
-                    if (pipe != null && key != shown)
+                    if (pipe != null && key != shown && game.Length > 0)
                     {
                         Send(pipe, 1, Activity(game, exe, start, !noName));
                         if (Read(pipe).Contains("\"evt\":\"ERROR\"") && !noName)
