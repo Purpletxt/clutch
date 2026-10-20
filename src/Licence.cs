@@ -60,11 +60,17 @@ namespace Clutch
             return State.Ok;
         }
 
-        static bool Verify(byte[] data, byte[] sig)
+#if DEV
+        public static string TestKey;
+#else
+        const string TestKey = null;
+#endif
+
+        public static bool Verify(byte[] data, byte[] sig)
         {
             try
             {
-                using (CngKey k = CngKey.Import(Convert.FromBase64String(PublicKey), CngKeyBlobFormat.EccPublicBlob))
+                using (CngKey k = CngKey.Import(Convert.FromBase64String(TestKey ?? PublicKey), CngKeyBlobFormat.EccPublicBlob))
                 using (ECDsaCng e = new ECDsaCng(k)) { e.HashAlgorithm = CngAlgorithm.Sha256; return e.VerifyData(data, sig); }
             }
             catch (Exception ex) { LastError = ex.GetType().Name + ": " + ex.Message; return false; }

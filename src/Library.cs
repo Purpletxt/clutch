@@ -101,6 +101,43 @@ namespace Clutch
 
         public static void SetFavorite(Clip c, bool fav) { c.Favorite = fav; Save(); Raise(); }
 
+        public static void SetGame(Clip c, string game) { c.Game = Games.Clean(game); Save(); Raise(); }
+
+        public static List<string> KnownGames()
+        {
+            List<string> o = new List<string>();
+            foreach (Clip c in Clips) if (c.Game.Length > 0 && !o.Contains(c.Game)) o.Add(c.Game);
+            foreach (GameEntry g in Settings.Cur.Games) { string n = Games.Clean(g.Name); if (n.Length > 0 && !o.Contains(n)) o.Add(n); }
+            o.Sort(StringComparer.OrdinalIgnoreCase);
+            return o;
+        }
+
+        public static long CleanUp(Predicate<Clip> inUse, out int count)
+        {
+            count = 0; long freed = 0;
+            Settings s = Settings.Cur;
+            if (!s.AutoClean) return 0;
+            List<Clip> old = new List<Clip>();
+            foreach (Clip c in Clips) if (!c.Favorite && !inUse(c)) old.Add(c);
+            old.Sort(delegate (Clip a, Clip b) { return a.Created.CompareTo(b.Created); });
+            long total = 0; foreach (Clip c in Clips) total += c.Size;
+            long cap = s.CleanGB > 0 ? s.CleanGB * 1024L * 1024 * 1024 : long.MaxValue;
+            DateTime cutoff = s.CleanDays > 0 ? DateTime.Now.AddDays(-s.CleanDays) : DateTime.MinValue;
+            foreach (Clip c in old)
+            {
+                if (c.Created >= cutoff && total <= cap) break;
+                try
+                {
+                    if (File.Exists(c.Path)) File.Delete(c.Path);
+                    try { string t = ThumbPath(c); if (File.Exists(t)) File.Delete(t); } catch { }
+                    Clips.Remove(c); total -= c.Size; freed += c.Size; count++;
+                }
+                catch (Exception ex) { Log.Info("Auto-clean", ex.Message); }
+            }
+            if (count > 0) { Log.Info("Auto-clean", "Deleted " + count + " old clips, freed " + NiceSize(freed)); Save(); Raise(); }
+            return freed;
+        }
+
         public static string SafeName(string s)
         {
             StringBuilder b = new StringBuilder();
@@ -259,39 +296,63 @@ namespace Clutch
 
         public static string Check()
         {
-            string found = ""; int pid = 0;
-            if (Settings.Cur.Games.Count == 0) { Running = RunningExe = ""; RunningPid = 0; return ""; }
+            string found = ""; int pid = 0, rank = 0;
+            bool auto = Settings.Cur.AutoDetectGames;
+            if (auto) GameList.Ensure();
+            if (Settings.Cur.Games.Count == 0 && !(auto && GameList.Ready)) { Running = RunningExe = ""; RunningPid = 0; return ""; }
             string exe = "";
             HashSet<string> want = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (GameEntry g in Settings.Cur.Games) want.Add(Path.GetFileNameWithoutExtension(g.Exe));
+            int fpid; Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out fpid);
             foreach (Process p in Process.GetProcesses())
             {
-                try { if (found == "" && want.Contains(p.ProcessName)) { found = NameFor(p.ProcessName); exe = p.ProcessName + ".exe"; pid = p.Id; GameIcons.Remember(found, ExePath(p.Id)); } }
+                try
+                {
+                    bool listed = want.Contains(p.ProcessName);
+                    string name = listed ? NameFor(p.ProcessName) : auto ? GameList.Match(p) : null;
+                    if (name != null && !listed) name = Same(Clean(name));
+                    if (name != null)
+                    {
+                        int r = (p.Id == fpid ? 4 : 0) + (listed ? 2 : 1);
+                        if (r > rank) { rank = r; found = Clean(name); exe = p.ProcessName + ".exe"; pid = p.Id; }
+                    }
+                }
                 catch { }
                 p.Dispose();
             }
+            if (pid != 0) try { GameIcons.Remember(found, ExePath(pid)); } catch { }
             Running = found; RunningExe = exe; RunningPid = pid; return found;
         }
 
         public static int RunningPid;
 
-        public static Rectangle? WindowArea()
+        static int Self { get { return Process.GetCurrentProcess().Id; } }
+
+        public static bool Alive(int pid)
         {
-            IntPtr fg = Native.GetForegroundWindow(); int fpid; Native.GetWindowThreadProcessId(fg, out fpid);
-            IntPtr h = IntPtr.Zero;
-            if (RunningPid != 0)
+            if (pid == 0) return false;
+            try { using (Process p = Process.GetProcessById(pid)) return !p.HasExited; } catch { return false; }
+        }
+
+        static bool Fullscreen(IntPtr h)
+        {
+            Rectangle f = ClientArea(h);
+            foreach (System.Windows.Forms.Screen sc in System.Windows.Forms.Screen.AllScreens) if (f == sc.Bounds) return true;
+            return false;
+        }
+
+        public static Rectangle? WindowArea(out int pid)
+        {
+            IntPtr fg = Native.GetForegroundWindow(); Native.GetWindowThreadProcessId(fg, out pid);
+            if (fg == IntPtr.Zero || pid == 0 || Native.IsIconic(fg)) return null;
+            if (RunningPid != 0 && pid == RunningPid)
             {
-                if (fpid == RunningPid) h = fg;
-                else try { using (Process p = Process.GetProcessById(RunningPid)) h = p.MainWindowHandle; } catch { }
-                if (h == IntPtr.Zero) return null;
-                if (Native.IsIconic(h) || !Native.IsWindowVisible(h)) return null;
-                Rectangle r = ClientArea(h);
+                Rectangle r = ClientArea(fg);
                 return r.Width < 160 || r.Height < 120 ? (Rectangle?)null : r;
             }
-            if (fg == IntPtr.Zero || fpid == Process.GetCurrentProcess().Id) return Rectangle.Empty;
-            Rectangle f = ClientArea(fg);
-            foreach (System.Windows.Forms.Screen sc in System.Windows.Forms.Screen.AllScreens) if (f == sc.Bounds) return f;
-            return Rectangle.Empty;
+            if (pid == Self) return null;
+            if (Fullscreen(fg)) { try { using (Process p = Process.GetProcessById(pid)) if (p.ProcessName == "explorer") return null; } catch { } return ClientArea(fg); }
+            return null;
         }
 
         static Rectangle ClientArea(IntPtr h)
@@ -308,21 +369,74 @@ namespace Clutch
             return proc;
         }
 
-        public static string ForClip()
+        public static string Current = "", CurrentExe = "";
+        static int currentPid;
+
+        static string GameName(Process p)
         {
-            if (Running != "") return Running;
+            foreach (GameEntry g in Settings.Cur.Games)
+                if (string.Equals(Path.GetFileNameWithoutExtension(g.Exe), p.ProcessName, StringComparison.OrdinalIgnoreCase)) return NameFor(p.ProcessName);
+            if (!Settings.Cur.AutoDetectGames) return null;
+            string n = GameList.Match(p);
+            return n == null ? null : Same(Clean(n));
+        }
+
+        static string Same(string name)
+        {
             try
             {
-                int pid; Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out pid);
-                using (Process p = Process.GetProcessById(pid))
-                {
-                    if (p.Id == Process.GetCurrentProcess().Id || p.ProcessName == "explorer") return "";
-                    string name = Friendly(p);
-                    GameIcons.Remember(name, ExePath(p.Id));
-                    return name;
-                }
+                foreach (GameEntry g in Settings.Cur.Games.ToArray()) { string n = Clean(g.Name); if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return n; }
+                foreach (Clip c in Library.Clips.ToArray()) if (string.Equals(c.Game, name, StringComparison.OrdinalIgnoreCase)) return c.Game;
             }
-            catch { return ""; }
+            catch { }
+            return name;
+        }
+
+        public static void UpdateCurrent()
+        {
+            try
+            {
+                IntPtr fg = Native.GetForegroundWindow(); int pid; Native.GetWindowThreadProcessId(fg, out pid);
+                if (pid != 0 && pid != Self)
+                    using (Process p = Process.GetProcessById(pid))
+                    {
+                        string known = GameName(p);
+                        if (known != null || p.ProcessName != "explorer" && Fullscreen(fg))
+                        {
+                            Current = known ?? Friendly(p); CurrentExe = p.ProcessName + ".exe"; currentPid = pid;
+                            GameIcons.Remember(Current, ExePath(pid));
+                            return;
+                        }
+                    }
+            }
+            catch { }
+            if (currentPid != 0 && Alive(currentPid)) return;
+            if (Running != "" && Alive(RunningPid)) { Current = Running; CurrentExe = RunningExe; currentPid = RunningPid; return; }
+            Current = CurrentExe = ""; currentPid = 0;
+        }
+
+        public static string ForClip()
+        {
+            string front = "";
+            try
+            {
+                IntPtr fg = Native.GetForegroundWindow(); int pid; Native.GetWindowThreadProcessId(fg, out pid);
+                if (pid != 0 && pid != Self)
+                    using (Process p = Process.GetProcessById(pid))
+                    {
+                        string known = GameName(p);
+                        if (known != null) { GameIcons.Remember(known, ExePath(p.Id)); return known; }
+                        if (p.ProcessName != "explorer")
+                        {
+                            front = Friendly(p);
+                            if (Fullscreen(fg)) { GameIcons.Remember(front, ExePath(p.Id)); return front; }
+                        }
+                    }
+            }
+            catch { }
+            if (Current != "" && Alive(currentPid)) return Current;
+            if (Running != "" && Alive(RunningPid)) return Running;
+            return front;
         }
 
         public static string Clean(string name)

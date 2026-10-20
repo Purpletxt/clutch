@@ -8,13 +8,23 @@ using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using System.Reflection;
+
+[assembly: AssemblyTitle("Clutch")]
+[assembly: AssemblyDescription("Clutch - game clip recorder")]
+[assembly: AssemblyCompany("Purpletxt")]
+[assembly: AssemblyProduct("Clutch")]
+[assembly: AssemblyCopyright("Copyright (c) 2026 Purpletxt")]
+[assembly: AssemblyVersion(Clutch.AppInfo.Version + ".0")]
+[assembly: AssemblyFileVersion(Clutch.AppInfo.Version + ".0")]
+[assembly: AssemblyInformationalVersion(Clutch.AppInfo.Version)]
 
 namespace Clutch
 {
     static class AppInfo
     {
         public const string Name = "Clutch";
-        public const string Version = "1.0.4";
+        public const string Version = "1.0.5";
     }
 
     static class Program
@@ -151,6 +161,12 @@ namespace Clutch
         public int Resolution = 0;
         public int Monitor = 0;
         public int CaptureMode = 0;
+        public bool AutoDetectGames = true;
+        public bool AutoClean = false;
+        public int CleanDays = 30;
+        public int CleanGB = 50;
+        public bool ShowAdvanced = false;
+        public string ShownAnnouncement = "";
         public string Encoder = "auto";
         public int HotkeyVk = 0x77;
         public int HotkeyMods = 0;

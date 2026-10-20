@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace Clutch
@@ -10,23 +11,39 @@ namespace Clutch
         static IntPtr hook;
         static Native.HookProc proc;
         static MainForm main;
-        static bool down, paused, fallbackOn;
-        static Timer watch;
+        static volatile bool down, paused, fallbackOn;
+        static System.Windows.Forms.Timer watch;
         static int lastPid = -1;
+        static Thread thread;
+        static ApplicationContext loop;
         static readonly bool selfElevated = IsElevated(Process.GetCurrentProcess().Id);
 
         public static void Start(MainForm m)
         {
             main = m; paused = false;
             if (Program.DevRun || !m.IsHandleCreated) return;
-            if (hook == IntPtr.Zero)
+            if (thread == null) StartHookThread();
+            if (watch == null) { watch = new System.Windows.Forms.Timer(); watch.Interval = 1000; watch.Tick += delegate { Tick(); }; watch.Start(); }
+            SetFallback(false); lastPid = -1; CheckForeground();
+        }
+
+        static void StartHookThread()
+        {
+            ManualResetEvent ready = new ManualResetEvent(false);
+            thread = new Thread(delegate ()
             {
                 proc = Hook;
                 hook = Native.SetWindowsHookEx(13, proc, Native.GetModuleHandle(null), 0);
                 if (hook == IntPtr.Zero) Log.Error("Clip key", "Keyboard hook failed (" + Marshal.GetLastWin32Error() + "); using a regular hotkey instead.");
-            }
-            if (watch == null) { watch = new Timer(); watch.Interval = 1000; watch.Tick += delegate { CheckForeground(); }; watch.Start(); }
-            SetFallback(false); lastPid = -1; CheckForeground();
+                loop = new ApplicationContext();
+                ready.Set();
+                Application.Run(loop);
+                if (hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+            });
+            thread.IsBackground = true; thread.Name = "Clip key"; thread.Priority = ThreadPriority.Highest;
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            ready.WaitOne(3000);
         }
 
         public static void Pause() { paused = true; SetFallback(false); }
@@ -35,7 +52,9 @@ namespace Clutch
         {
             if (watch != null) { watch.Stop(); watch.Dispose(); watch = null; }
             SetFallback(false);
-            if (hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+            ApplicationContext l = loop;
+            if (l != null && thread != null) { try { l.ExitThread(); } catch { } thread.Join(1000); }
+            thread = null; loop = null;
         }
 
         static IntPtr Hook(int code, IntPtr w, IntPtr l)
@@ -48,9 +67,11 @@ namespace Clutch
                     bool isDown = msg == 0x100 || msg == 0x104;
                     if (isDown && !down)
                     {
-                        down = true;
                         if (!fallbackOn && HeldMods() == Settings.Cur.HotkeyMods)
+                        {
+                            down = true;
                             try { main.BeginInvoke((MethodInvoker)main.SaveClip); } catch { }
+                        }
                     }
                     else if (!isDown) down = false;
                 }
@@ -62,6 +83,12 @@ namespace Clutch
         static int HeldMods()
         {
             return (Held(0x12) ? 1 : 0) | (Held(0x11) ? 2 : 0) | (Held(0x10) ? 4 : 0) | (Held(0x5B) || Held(0x5C) ? 8 : 0);
+        }
+
+        static void Tick()
+        {
+            if (down && !Held(Settings.Cur.HotkeyVk)) down = false;
+            CheckForeground();
         }
 
         static void CheckForeground()

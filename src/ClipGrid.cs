@@ -163,6 +163,7 @@ namespace Clutch
             Menus.Item(m, "Copy file (for Discord)", Glyph.Copy, delegate { main.CopyClips(new List<Clip> { c }); });
             Menus.Item(m, c.Favorite ? "Remove from favourites" : "Add to favourites", c.Favorite ? Glyph.StarFill : Glyph.Star, delegate { main.ToggleFavorite(c); });
             Menus.Item(m, "Rename", Glyph.Rename, delegate { main.RenameClip(c); });
+            Menus.Item(m, "Change game\u2026", Glyph.Game, delegate { main.ChangeGame(c); });
             Menus.Item(m, "Select", Glyph.Check, delegate { Toggle(c); anchor = list.IndexOf(c); });
             Menus.Item(m, "Show in folder", Glyph.Folder, delegate { main.ShowInFolder(c); });
             m.Items.Add(new ToolStripSeparator());

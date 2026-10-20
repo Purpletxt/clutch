@@ -48,6 +48,19 @@ namespace Clutch
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Ui.StyleTitleBar(this, C.Panel); }
         protected override void OnShown(EventArgs e) { base.OnShown(e); box.Box.Focus(); box.Box.SelectAll(); }
 
+        public static string AskGame(IWin32Window owner, string current, List<string> known)
+        {
+            using (RenameDialog d = new RenameDialog(current))
+            {
+                d.Text = "Change game"; d.head.Text = "Change game"; d.ok.Text = "Save";
+                d.hint.Text = "Which game this clip belongs to. Clips are grouped by it.";
+                d.box.Placeholder = "Game name";
+                AutoCompleteStringCollection list = new AutoCompleteStringCollection(); list.AddRange(known.ToArray());
+                d.box.Box.AutoCompleteCustomSource = list; d.box.Box.AutoCompleteSource = AutoCompleteSource.CustomSource; d.box.Box.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+                return d.ShowDialog(owner) == DialogResult.OK ? d.box.Box.Text.Trim() : null;
+            }
+        }
+
         public static string Ask(IWin32Window owner, string current)
         {
             if (ShotMode) { RenameDialog s = new RenameDialog(current); s.StartPosition = FormStartPosition.CenterScreen; s.Show(owner); return null; }

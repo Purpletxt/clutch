@@ -143,7 +143,7 @@ namespace Clutch
             a.Append(",\"activity\":{\"type\":0");
             if (withName) a.Append(",\"name\":").Append(J(game + " with Clutch"));
             a.Append(",\"details\":").Append(J("Clipping " + game + " with Clutch"));
-            a.Append(",\"timestamps\":{\"start\":").Append(start).Append("}");
+            if (start >= 1) a.Append(",\"timestamps\":{\"start\":").Append(start).Append("}");
             a.Append(",\"assets\":{\"large_image\":").Append(J(icon ?? "clutch")).Append(",\"large_text\":").Append(J(game));
             if (icon != null) a.Append(",\"small_image\":\"clutch\",\"small_text\":\"Clutch\"");
             a.Append("},\"instance\":false}}}");

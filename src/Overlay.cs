@@ -16,6 +16,7 @@ namespace Clutch
         int phase;
         DateTime phaseStart;
         const int InMs = 260, HoldMs = 2600, OutMs = 220;
+        int hold = HoldMs;
         static int S(float v) { return Ui.S(v); }
 
         public SavedOverlay()
@@ -41,19 +42,22 @@ namespace Clutch
             if (Program.ShotPage == null) try { Native.SetWindowDisplayAffinity(Handle, Native.WDA_EXCLUDEFROMCAPTURE); } catch { }
         }
 
-        public static void Pop(string title, string detail, bool ok, Rectangle screen)
+        public static void Pop(string title, string detail, bool ok, Rectangle screen) { Pop(title, detail, ok, screen, 0); }
+
+        public static void Pop(string title, string detail, bool ok, Rectangle screen, int holdMs)
         {
             if (current == null || current.IsDisposed) current = new SavedOverlay();
-            current.Show(title, detail, ok, screen);
+            current.Show(title, detail, ok, screen, holdMs);
         }
 
-        void Show(string title, string detail, bool ok, Rectangle scr)
+        void Show(string title, string detail, bool ok, Rectangle scr, int holdMs)
         {
             bool showing = phase == 1 || phase == 2;
             bool wasLeft = left;
             screen = scr; left = Settings.Cur.OverlaySide == 1; yFrac = Math.Max(0, Math.Min(1, Settings.Cur.OverlayY));
             if (wasLeft != left) showing = false;
-            Draw(title, detail, ok);
+            hold = holdMs > 0 ? holdMs : HoldMs;
+            Draw(title, detail, ok, holdMs > 0);
             if (!IsHandleCreated) CreateHandle();
             if (showing && phase == 2) { phaseStart = DateTime.Now; Place(1); }
             else { phase = 1; phaseStart = DateTime.Now; Place(0); }
@@ -69,7 +73,7 @@ namespace Clutch
             {
                 double p = Math.Min(1, t / InMs);
                 Place(1 - Math.Pow(1 - p, 3));
-                if (p >= 1) { phase = 2; phaseStart = DateTime.Now; timer.Interval = HoldMs; }
+                if (p >= 1) { phase = 2; phaseStart = DateTime.Now; timer.Interval = hold; }
             }
             else if (phase == 2) { phase = 3; phaseStart = DateTime.Now; timer.Interval = 15; }
             else if (phase == 3)
@@ -93,17 +97,24 @@ namespace Clutch
             Native.SelectObject(memDc, old); Native.DeleteDC(memDc); Native.ReleaseDC(IntPtr.Zero, screenDc);
         }
 
-        void Draw(string title, string detail, bool ok)
+        void Draw(string title, string detail, bool ok, bool wrap)
         {
             FreeCard();
-            int h = S(70), logo = S(42), pad = S(16), tx = pad + logo + S(14);
+            int h = S(70), logo = S(42), pad = S(16), tx = pad + logo + S(14), dh = S(22);
             using (Font ft = new Font(Ui.BoldFont, 13.5f * Ui.Scale, FontStyle.Bold, GraphicsUnit.Point))
             using (Font fd = new Font(Ui.TextFont, 9.5f * Ui.Scale, FontStyle.Regular, GraphicsUnit.Point))
             {
-                int tw;
+                int tw, w;
                 using (Bitmap probe = new Bitmap(1, 1)) using (Graphics pg = Graphics.FromImage(probe))
+                {
                     tw = (int)Math.Ceiling(Math.Max(pg.MeasureString(title, ft).Width, pg.MeasureString(detail, fd).Width));
-                int w = Math.Min(S(420), Math.Max(S(230), tx + tw + S(28)));
+                    w = Math.Min(S(wrap ? 460 : 420), Math.Max(S(230), tx + tw + S(28)));
+                    if (wrap)
+                    {
+                        dh = (int)Math.Ceiling(Math.Min(pg.MeasureString(detail, fd, w - tx - S(16)).Height, fd.GetHeight(pg) * 4 + 2));
+                        h = Math.Max(S(70), S(14) + S(30) + dh + S(14));
+                    }
+                }
                 card = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
                 using (Graphics g = Graphics.FromImage(card))
                 {
@@ -120,10 +131,12 @@ namespace Clutch
                     if (ok && Ui.Logo != null) g.DrawImage(Ui.Logo, lr);
                     else Ui.DrawIcon(g, ok ? Glyph.Check : Glyph.Warning, 18, lr, ok ? C.AccentHi : C.Warn);
                     StringFormat sf = new StringFormat(StringFormatFlags.NoWrap); sf.Trimming = StringTrimming.EllipsisCharacter;
+                    StringFormat wf = new StringFormat(); wf.Trimming = StringTrimming.EllipsisWord;
+                    float ty = wrap ? (h - S(30) - dh) / 2f : h / 2f - S(27);
                     using (SolidBrush b = new SolidBrush(Color.White))
-                        g.DrawString(title, ft, b, new RectangleF(tx, h / 2f - S(27), w - tx - S(12), S(30)), sf);
+                        g.DrawString(title, ft, b, new RectangleF(tx, ty, w - tx - S(12), S(30)), sf);
                     using (SolidBrush b = new SolidBrush(Color.FromArgb(225, 225, 230)))
-                        g.DrawString(detail, fd, b, new RectangleF(tx, h / 2f + S(3), w - tx - S(12), S(22)), sf);
+                        g.DrawString(detail, fd, b, new RectangleF(tx, wrap ? ty + S(30) : h / 2f + S(3), w - tx - S(16), dh), wrap ? wf : sf);
                 }
             }
             cardBits = card.GetHbitmap(Color.FromArgb(0));
