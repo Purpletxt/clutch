@@ -116,7 +116,8 @@ namespace Clutch
                 {
                     string text;
                     ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
-                    using (WebClient w = new WebClient()) { w.Headers[HttpRequestHeader.UserAgent] = "Clutch/" + AppInfo.Version; w.Encoding = Encoding.UTF8; text = w.DownloadString(url); }
+                    bool fresh; text = Web.Get(url, null, out fresh);
+                    if (!fresh) return;
                     List<string> serials = ParseRevoked(text);
                     if (serials == null) return;
                     File.WriteAllLines(RevokedFile, serials.ToArray());

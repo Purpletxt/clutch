@@ -24,7 +24,7 @@ namespace Clutch
     static class AppInfo
     {
         public const string Name = "Clutch";
-        public const string Version = "1.0.6";
+        public const string Version = "1.0.7";
     }
 
     static class Program

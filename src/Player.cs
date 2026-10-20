@@ -3,10 +3,121 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace Clutch
 {
+    [StructLayout(LayoutKind.Explicit, Size = 24)]
+    struct PropVariant { [FieldOffset(0)] public ushort Vt; [FieldOffset(8)] public long Value; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MfSize { public int W, H; }
+
+    [ComImport, Guid("A714590A-58AF-430a-85BF-44F5EC838D85"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMFPMediaPlayer
+    {
+        [PreserveSig] int Play();
+        [PreserveSig] int Pause();
+        [PreserveSig] int Stop();
+        [PreserveSig] int FrameStep();
+        [PreserveSig] int SetPosition(ref Guid type, ref PropVariant value);
+        [PreserveSig] int GetPosition(ref Guid type, out PropVariant value);
+        [PreserveSig] int GetDuration(ref Guid type, out PropVariant value);
+        [PreserveSig] int SetRate(float rate);
+        [PreserveSig] int GetRate(out float rate);
+        [PreserveSig] int GetSupportedRates(bool forward, out float slowest, out float fastest);
+        [PreserveSig] int GetState(out int state);
+        [PreserveSig] int CreateMediaItemFromURL([MarshalAs(UnmanagedType.LPWStr)] string url, bool sync, IntPtr userData, out IntPtr item);
+        [PreserveSig] int CreateMediaItemFromObject(IntPtr obj, bool sync, IntPtr userData, out IntPtr item);
+        [PreserveSig] int SetMediaItem(IntPtr item);
+        [PreserveSig] int ClearMediaItem();
+        [PreserveSig] int GetMediaItem(out IntPtr item);
+        [PreserveSig] int GetVolume(out float volume);
+        [PreserveSig] int SetVolume(float volume);
+        [PreserveSig] int GetBalance(out float balance);
+        [PreserveSig] int SetBalance(float balance);
+        [PreserveSig] int GetMute(out bool mute);
+        [PreserveSig] int SetMute(bool mute);
+        [PreserveSig] int GetNativeVideoSize(out MfSize video, out MfSize aspect);
+        [PreserveSig] int GetIdealVideoSize(out MfSize min, out MfSize max);
+        [PreserveSig] int SetVideoSourceRect(IntPtr rect);
+        [PreserveSig] int GetVideoSourceRect(IntPtr rect);
+        [PreserveSig] int SetAspectRatioMode(int mode);
+        [PreserveSig] int GetAspectRatioMode(out int mode);
+        [PreserveSig] int GetVideoWindow(out IntPtr hwnd);
+        [PreserveSig] int UpdateVideo();
+        [PreserveSig] int SetBorderColor(int color);
+        [PreserveSig] int GetBorderColor(out int color);
+        [PreserveSig] int InsertEffect(IntPtr effect, bool optional);
+        [PreserveSig] int RemoveEffect(IntPtr effect);
+        [PreserveSig] int RemoveAllEffects();
+        [PreserveSig] int Shutdown();
+    }
+
+    class MfPlayer : IDisposable
+    {
+        [DllImport("mfplay.dll", ExactSpelling = true)]
+        static extern int MFPCreateMediaPlayer([MarshalAs(UnmanagedType.LPWStr)] string url, bool startPlayback, int options, IntPtr callback, IntPtr hwnd, out IMFPMediaPlayer player);
+        [DllImport("mfplat.dll", ExactSpelling = true)] static extern int MFStartup(int version, int flags);
+
+        public const int Empty = 0, Stopped = 1, Playing = 2, Paused = 3;
+        static bool started;
+        IMFPMediaPlayer p;
+        public string Error = "";
+
+        public static MfPlayer Create(IntPtr hwnd, out string error)
+        {
+            error = "";
+            try
+            {
+                if (!started) { int hr0 = MFStartup(0x20070, 0); if (hr0 < 0) { error = "MFStartup 0x" + hr0.ToString("X8"); return null; } started = true; }
+                IMFPMediaPlayer mp;
+                int hr = MFPCreateMediaPlayer(null, false, 0, IntPtr.Zero, hwnd, out mp);
+                if (hr < 0 || mp == null) { error = "MFPCreateMediaPlayer 0x" + hr.ToString("X8"); return null; }
+                mp.SetBorderColor(0);
+                MfPlayer m = new MfPlayer(); m.p = mp; return m;
+            }
+            catch (Exception ex) { error = ex.GetType().Name + ": " + ex.Message; return null; }
+        }
+
+        public bool Open(string file)
+        {
+            IntPtr item;
+            int hr = p.CreateMediaItemFromURL(file, true, IntPtr.Zero, out item);
+            if (hr < 0 || item == IntPtr.Zero) { Error = "open 0x" + hr.ToString("X8"); return false; }
+            try { hr = p.SetMediaItem(item); } finally { Marshal.Release(item); }
+            if (hr < 0) { Error = "set 0x" + hr.ToString("X8"); return false; }
+            return true;
+        }
+
+        public int State { get { int s; return p != null && p.GetState(out s) >= 0 ? s : Empty; } }
+        public void Play() { if (p != null) p.Play(); }
+        public void Pause() { if (p != null) p.Pause(); }
+        public void Stop() { if (p != null) p.Stop(); }
+        public void Update() { if (p != null) p.UpdateVideo(); }
+
+        public double Position
+        {
+            get { Guid g = Guid.Empty; PropVariant v; return p != null && p.GetPosition(ref g, out v) >= 0 ? v.Value / 1e7 : 0; }
+            set { if (p == null) return; Guid g = Guid.Empty; PropVariant v = new PropVariant(); v.Vt = 20; v.Value = (long)(Math.Max(0, value) * 1e7); p.SetPosition(ref g, ref v); }
+        }
+
+        public double Duration { get { Guid g = Guid.Empty; PropVariant v; return p != null && p.GetDuration(ref g, out v) >= 0 ? v.Value / 1e7 : 0; } }
+
+        public float Volume { set { if (p != null) p.SetVolume(Math.Max(0, Math.Min(1, value))); } }
+
+        public Size VideoSize { get { MfSize s, a; return p != null && p.GetNativeVideoSize(out s, out a) >= 0 ? new Size(s.W, s.H) : Size.Empty; } }
+
+        public void Dispose()
+        {
+            IMFPMediaPlayer x = p; p = null;
+            if (x == null) return;
+            try { x.Stop(); x.ClearMediaItem(); x.Shutdown(); } catch { }
+            try { Marshal.FinalReleaseComObject(x); } catch { }
+        }
+    }
+
     class WmpHost : AxHost
     {
         public WmpHost() : base("6bf52a52-394a-11d3-b153-00c04f79faa6") { }
@@ -15,13 +126,24 @@ namespace Clutch
 
     class VideoView : Panel
     {
-        WmpHost host; bool failed; string path = "";
+        static bool mfBroken, wmpBroken;
+        MfPlayer mf; Panel surface;
+        WmpHost host;
+        string path = "";
         readonly Lbl fallback;
         public event Action Ended;
-        int lastState;
+        int lastState; bool ended;
+        int volume = 100;
+        string pending; bool pendingPlay, pauseWhenPlaying, muteUntilPaused; double pendingPos;
+        Form full;
 
         public VideoView()
         {
+#if DEV
+            string force = Environment.GetEnvironmentVariable("CLUTCH_PLAYER");
+            if (force == "wmp") mfBroken = true;
+            if (force == "none") mfBroken = wmpBroken = true;
+#endif
             BackColor = Color.Black;
             fallback = new Lbl("", 10, 0, C.Sub); fallback.Center = true; fallback.Dock = DockStyle.Fill; fallback.Visible = false; fallback.BackColor = Color.Black;
             Controls.Add(fallback);
@@ -29,33 +151,47 @@ namespace Clutch
 
         bool Ensure()
         {
-            if (host != null) return true;
-            if (failed || Program.ShotPage != null) return false;
-            try
+            if (mf != null || host != null) return true;
+            if (Program.ShotPage != null) return false;
+            if (!mfBroken)
             {
-                host = new WmpHost();
-                ((System.ComponentModel.ISupportInitialize)host).BeginInit();
-                host.Dock = DockStyle.Fill;
-                Controls.Add(host);
-                ((System.ComponentModel.ISupportInitialize)host).EndInit();
-                dynamic p = host.P;
-                p.uiMode = "none"; p.stretchToFit = true; p.enableContextMenu = false;
-                p.settings.autoStart = false; p.settings.volume = 100;
-                return true;
+                surface = new Panel(); surface.BackColor = Color.Black; surface.Dock = DockStyle.Fill;
+                Controls.Add(surface); surface.CreateControl();
+                surface.Resize += delegate { if (mf != null) mf.Update(); };
+                surface.Paint += delegate { if (mf != null) mf.Update(); };
+                surface.DoubleClick += delegate { FullScreen(); };
+                string err;
+                mf = MfPlayer.Create(surface.Handle, out err);
+                if (mf != null) return true;
+                Log.Info("Video player", "Media Foundation isn't available (" + err + "), trying Windows Media Player");
+                mfBroken = true; Controls.Remove(surface); surface.Dispose(); surface = null;
             }
-            catch (Exception ex)
+            if (!wmpBroken)
             {
-                Log.Error("Video player", ex); failed = true;
-                if (host != null) { try { Controls.Remove(host); host.Dispose(); } catch { } host = null; }
-                fallback.Text = "Windows Media Player isn't available, so clips open in your default video app.";
-                fallback.Visible = true;
-                return false;
+                try
+                {
+                    host = new WmpHost();
+                    ((System.ComponentModel.ISupportInitialize)host).BeginInit();
+                    host.Dock = DockStyle.Fill;
+                    Controls.Add(host);
+                    ((System.ComponentModel.ISupportInitialize)host).EndInit();
+                    dynamic p = host.P;
+                    p.uiMode = "none"; p.stretchToFit = true; p.enableContextMenu = false;
+                    p.settings.autoStart = false; p.settings.volume = volume;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Video player", ex); wmpBroken = true;
+                    if (host != null) { try { Controls.Remove(host); host.Dispose(); } catch { } host = null; }
+                }
             }
+            fallback.Text = "Clutch can't play video on this PC, so clips open in your default video app.";
+            fallback.Visible = true;
+            return false;
         }
 
-        public bool Available { get { return !failed && Program.ShotPage == null; } }
-
-        string pending; bool pendingPlay, pauseWhenPlaying; double pendingPos;
+        public bool Available { get { return !(mfBroken && wmpBroken) && Program.ShotPage == null; } }
 
         public void Open(string file, bool autoplay)
         {
@@ -66,10 +202,24 @@ namespace Clutch
         void Load()
         {
             if (pending == null) return;
-            string file = pending; pending = null;
+            string file = pending; pending = null; ended = false;
             if (!Ensure()) return;
             try
             {
+                if (mf != null)
+                {
+                    if (!mf.Open(file))
+                    {
+                        Log.Info("Video open", "Media Foundation couldn't open the clip (" + mf.Error + "), trying Windows Media Player");
+                        ReleaseNow(); mfBroken = true; pending = file; Load(); return;
+                    }
+                    muteUntilPaused = !pendingPlay;
+                    mf.Volume = muteUntilPaused ? 0 : volume / 100f;
+                    applyPos = pendingPos; startWhenReady = true;
+                    mf.Play();
+                    pauseWhenPlaying = !pendingPlay;
+                    return;
+                }
                 dynamic p = host.P; p.URL = file;
                 if (pendingPos > 0) p.controls.currentPosition = pendingPos;
                 p.controls.play();
@@ -77,60 +227,146 @@ namespace Clutch
             }
             catch (Exception ex) { Log.Error("Video open", ex); }
         }
+        double applyPos; bool startWhenReady;
 
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);
             if (Visible) { if (pending != null && IsHandleCreated) BeginInvoke((MethodInvoker)Load); }
-            else if (host != null)
+            else if (mf != null || host != null)
             {
                 if (path.Length > 0 && pending == null) { pendingPos = Position; pendingPlay = false; pending = path; }
                 if (IsHandleCreated) BeginInvoke((MethodInvoker)Release);
             }
         }
 
-        void Release()
+        void Release() { if (!Visible) ReleaseNow(); }
+
+        void ReleaseNow()
         {
-            if (host == null || Visible) return;
-            try { dynamic p = host.P; p.controls.stop(); p.close(); } catch { }
-            try { Controls.Remove(host); host.Dispose(); } catch { }
-            host = null;
+            if (mf != null) { mf.Dispose(); mf = null; }
+            if (surface != null) { try { Controls.Remove(surface); surface.Dispose(); } catch { } surface = null; }
+            if (host != null)
+            {
+                try { dynamic p = host.P; p.controls.stop(); p.close(); } catch { }
+                try { Controls.Remove(host); host.Dispose(); } catch { }
+                host = null;
+            }
         }
 
         public void Close()
         {
             path = ""; pending = null; pauseWhenPlaying = false;
+            ExitFull();
+            if (mf != null) { mf.Stop(); return; }
             if (host == null) return;
             try { dynamic p = host.P; p.controls.stop(); p.close(); } catch { }
         }
 
-        public bool Playing { get { try { return host != null && (int)host.P.playState == 3; } catch { return false; } } }
+        public bool Playing
+        {
+            get
+            {
+                if (mf != null) return mf.State == MfPlayer.Playing && !pauseWhenPlaying;
+                try { return host != null && (int)host.P.playState == 3; } catch { return false; }
+            }
+        }
 
-        public void Play() { try { if (host != null) host.P.controls.play(); } catch { } }
-        public void Pause() { try { if (host != null) host.P.controls.pause(); } catch { } }
+        public void Play()
+        {
+            if (mf != null) { if (ended || Length > 0 && Position >= Length - 0.05) { mf.Position = 0; ended = false; } mf.Volume = volume / 100f; muteUntilPaused = false; pauseWhenPlaying = false; mf.Play(); return; }
+            try { if (host != null) host.P.controls.play(); } catch { }
+        }
+
+        public void Pause()
+        {
+            if (mf != null) { mf.Pause(); return; }
+            try { if (host != null) host.P.controls.pause(); } catch { }
+        }
+
         public void TogglePlay() { if (Playing) Pause(); else Play(); }
 
-        public void FullScreen() { try { if (host == null) return; if (!Playing) Play(); host.P.fullScreen = true; } catch { } }
+        public void FullScreen()
+        {
+            if (mf != null)
+            {
+                if (full != null) { ExitFull(); return; }
+                full = new Form(); full.FormBorderStyle = FormBorderStyle.None; full.BackColor = Color.Black; full.ShowInTaskbar = false; full.KeyPreview = true;
+                full.StartPosition = FormStartPosition.Manual; full.Bounds = Screen.FromControl(this).Bounds; full.TopMost = true;
+                full.KeyDown += delegate (object s, KeyEventArgs e)
+                {
+                    if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.F) ExitFull();
+                    else if (e.KeyCode == Keys.Space) TogglePlay();
+                    else if (e.KeyCode == Keys.Left) Position = Position - 5;
+                    else if (e.KeyCode == Keys.Right) Position = Position + 5;
+                };
+                full.FormClosed += delegate { full = null; };
+                Controls.Remove(surface); full.Controls.Add(surface);
+                full.Show(FindForm()); full.Activate();
+                if (!Playing) Play();
+                mf.Update();
+                return;
+            }
+            try { if (host == null) return; if (!Playing) Play(); host.P.fullScreen = true; } catch { }
+        }
+
+        void ExitFull()
+        {
+            Form f = full; full = null;
+            if (f == null) return;
+            if (surface != null && !surface.IsDisposed) { f.Controls.Remove(surface); Controls.Add(surface); surface.BringToFront(); }
+            f.Close(); f.Dispose();
+            if (mf != null) mf.Update();
+        }
 
         public double Position
         {
-            get { try { return host == null || pending != null ? pendingPos : (double)host.P.controls.currentPosition; } catch { return 0; } }
-            set { try { if (host != null) host.P.controls.currentPosition = Math.Max(0, value); } catch { } }
+            get
+            {
+                if (mf != null) return pending != null ? pendingPos : mf.Position;
+                try { return host == null || pending != null ? pendingPos : (double)host.P.controls.currentPosition; } catch { return 0; }
+            }
+            set
+            {
+                if (mf != null) { ended = false; double len = Length; mf.Position = len > 0 ? Math.Min(value, len - 0.05) : value; return; }
+                try { if (host != null) host.P.controls.currentPosition = Math.Max(0, value); } catch { }
+            }
         }
 
         public double Length
         {
-            get { try { return host == null || host.P.currentMedia == null ? 0 : (double)host.P.currentMedia.duration; } catch { return 0; } }
+            get
+            {
+                if (mf != null) return mf.Duration;
+                try { return host == null || host.P.currentMedia == null ? 0 : (double)host.P.currentMedia.duration; } catch { return 0; }
+            }
         }
 
         public int Volume
         {
-            get { try { return host == null ? 100 : (int)host.P.settings.volume; } catch { return 100; } }
-            set { try { if (host != null) host.P.settings.volume = value; } catch { } }
+            get { return volume; }
+            set
+            {
+                volume = Math.Max(0, Math.Min(100, value));
+                if (mf != null) { if (!muteUntilPaused) mf.Volume = volume / 100f; return; }
+                try { if (host != null) host.P.settings.volume = volume; } catch { }
+            }
         }
 
         public void Poll()
         {
+            if (mf != null)
+            {
+                int s = mf.State;
+                if (startWhenReady) { if (s == MfPlayer.Playing) startWhenReady = false; else if (s == MfPlayer.Stopped) mf.Play(); }
+                if (s == MfPlayer.Playing && applyPos > 0) { mf.Position = applyPos; applyPos = 0; }
+                if (pauseWhenPlaying && s == MfPlayer.Playing && applyPos == 0) { pauseWhenPlaying = false; mf.Pause(); }
+                if (muteUntilPaused && s == MfPlayer.Paused) { muteUntilPaused = false; mf.Volume = volume / 100f; }
+                double len = mf.Duration;
+                if (!ended && len > 0 && s != MfPlayer.Playing && lastState == MfPlayer.Playing && mf.Position >= len - 0.25) { ended = true; if (Ended != null) Ended(); }
+                lastState = s;
+                return;
+            }
             int st = 0; try { st = host == null ? 0 : (int)host.P.playState; } catch { }
             if (pauseWhenPlaying && st == 3) { pauseWhenPlaying = false; Pause(); }
             if (st == 8 && lastState != 8 && Ended != null) Ended();
@@ -141,6 +377,7 @@ namespace Clutch
         {
             get
             {
+                if (mf != null) { if (pending != null) return 0; Size z = mf.VideoSize; return z.Width > 0 && z.Height > 0 ? (double)z.Width / z.Height : 0; }
                 try { if (host == null || pending != null) return 0; dynamic m = host.P.currentMedia; if (m == null) return 0; int w = m.imageSourceWidth, h = m.imageSourceHeight; return w > 0 && h > 0 ? (double)w / h : 0; }
                 catch { return 0; }
             }
@@ -150,7 +387,8 @@ namespace Clutch
 
         public string Diagnostics()
         {
-            try { dynamic p = host.P; return "state=" + (int)p.playState + " size=" + (int)p.currentMedia.imageSourceWidth + "x" + (int)p.currentMedia.imageSourceHeight + " status=" + (string)p.status + " version=" + (string)p.versionInfo; }
+            if (mf != null) { Size z = mf.VideoSize; return "engine=MediaFoundation state=" + mf.State + " size=" + z.Width + "x" + z.Height + " len=" + mf.Duration.ToString("0.00"); }
+            try { dynamic p = host.P; return "engine=WMP state=" + (int)p.playState + " size=" + (int)p.currentMedia.imageSourceWidth + "x" + (int)p.currentMedia.imageSourceHeight; }
             catch (Exception ex) { return "diag failed: " + ex.Message; }
         }
 

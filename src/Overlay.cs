@@ -153,6 +153,16 @@ namespace Clutch
             return p;
         }
 
+        public static Bitmap Sample(bool onLeft)
+        {
+            using (SavedOverlay o = new SavedOverlay())
+            {
+                o.left = onLeft;
+                o.Draw("Clipped!", "Clipped Counter-Strike 2  \u00B7  60s", true, false);
+                return new Bitmap(o.card);
+            }
+        }
+
         void FreeCard()
         {
             if (cardBits != IntPtr.Zero) { Native.DeleteObject(cardBits); cardBits = IntPtr.Zero; }
@@ -169,60 +179,113 @@ namespace Clutch
         protected override void Dispose(bool disposing) { if (disposing) { timer.Dispose(); FreeCard(); } base.Dispose(disposing); }
     }
 
-    class OverlayPicker : Ctl
+    class OverlayEditor : Form
     {
-        public event Action Changed;
-        bool drag; bool left = Settings.Cur.OverlaySide == 1; double y = Settings.Cur.OverlayY;
+        Bitmap backdrop, cardL, cardR;
+        readonly Rectangle screen;
+        bool left; double y; bool drag; int grabDy;
+        readonly Btn save = new Btn("Save", "", BtnStyle.Accent), cancel = new Btn("Cancel", "", BtnStyle.Standard);
+        public bool Saved;
+#if DEV
+        public static bool NoBackdrop;
+#endif
+        static int S(float v) { return Ui.S(v); }
 
-        public OverlayPicker() { Cursor = Cursors.SizeAll; }
+        public OverlayEditor(Rectangle scr)
+        {
+            screen = scr; left = Settings.Cur.OverlaySide == 1; y = Settings.Cur.OverlayY;
+            FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; Bounds = scr; TopMost = true; ShowInTaskbar = false;
+            BackColor = Color.Black; DoubleBuffered = true; KeyPreview = true; Cursor = Cursors.Default;
+            try
+            {
+#if DEV
+                if (NoBackdrop) throw new Exception();
+#endif
+                backdrop = new Bitmap(scr.Width, scr.Height);
+                using (Graphics g = Graphics.FromImage(backdrop))
+                {
+                    g.CopyFromScreen(scr.Location, Point.Empty, scr.Size);
+                    using (SolidBrush dim = new SolidBrush(Color.FromArgb(150, 8, 8, 12))) g.FillRectangle(dim, 0, 0, scr.Width, scr.Height);
+                }
+            }
+            catch { backdrop = null; }
+            cardL = SavedOverlay.Sample(true); cardR = SavedOverlay.Sample(false);
+            save.Click += delegate { Settings.Cur.OverlaySide = left ? 1 : 0; Settings.Cur.OverlayY = Math.Round(y, 3); Settings.Save(); Saved = true; Close(); };
+            cancel.Click += delegate { Close(); };
+            KeyDown += delegate (object s, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Escape) Close();
+                else if (e.KeyCode == Keys.Enter) save.PerformClick();
+                else if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) { y = Math.Max(0, Math.Min(1, y + (e.KeyCode == Keys.Up ? -0.02 : 0.02))); Invalidate(); }
+                else if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) { left = e.KeyCode == Keys.Left; Invalidate(); }
+            };
+            Controls.Add(save); Controls.Add(cancel);
+            int bw = S(110), bh = S(40), cx = scr.Width / 2;
+            cancel.SetBounds(cx + S(6), scr.Height / 2 + S(44), bw, bh); save.SetBounds(cx - S(6) - bw, scr.Height / 2 + S(44), bw, bh);
+            foreach (Btn b in new[] { save, cancel }) b.BackColor = Color.FromArgb(20, 19, 28);
+        }
 
-        public void Load() { left = Settings.Cur.OverlaySide == 1; y = Settings.Cur.OverlayY; Invalidate(); }
+        Bitmap Card { get { return left ? cardL : cardR; } }
+        int Margin_ { get { return S(28); } }
 
-        Rectangle Screen_ { get { int h = Height - S(4), w = Math.Min(Width - S(2), h * 16 / 9); return new Rectangle(Width - w - S(1), S(2), w, h); } }
-        Rectangle Card_
+        Rectangle CardRect
         {
             get
             {
-                Rectangle s = Screen_; int cw = s.Width * 36 / 100, ch = Math.Max(S(18), s.Height * 19 / 100), m = s.Height * 5 / 100;
-                int top = s.Top + m + (int)Math.Round((s.Height - ch - m * 2) * y);
-                return new Rectangle(left ? s.Left : s.Right - cw, top, cw, ch);
+                Bitmap c = Card; int m = Margin_;
+                int top = m + (int)Math.Round(Math.Max(0, screen.Height - c.Height - m * 2) * y);
+                return new Rectangle(left ? 0 : screen.Width - c.Width, top, c.Width, c.Height);
             }
         }
 
-        void Move_(Point p)
+        protected override void OnMouseDown(MouseEventArgs e)
         {
-            Rectangle s = Screen_, c = Card_; int m = s.Height * 5 / 100;
-            left = p.X < s.Left + s.Width / 2;
-            y = Math.Max(0, Math.Min(1, (p.Y - s.Top - m - c.Height / 2.0) / Math.Max(1, s.Height - c.Height - m * 2)));
-            Invalidate();
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            Rectangle r = CardRect;
+            drag = true; grabDy = r.Contains(e.Location) ? e.Y - r.Y : r.Height / 2;
+            MoveTo(e.Location);
         }
-        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button == MouseButtons.Left && Enabled) { drag = true; Capture = true; Move_(e.Location); } }
-        protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (drag) Move_(e.Location); }
-        protected override void OnMouseUp(MouseEventArgs e)
+
+        protected override void OnMouseMove(MouseEventArgs e)
         {
-            base.OnMouseUp(e);
-            if (!drag) return;
-            drag = false; Capture = false;
-            Settings.Cur.OverlaySide = left ? 1 : 0; Settings.Cur.OverlayY = Math.Round(y, 3); Settings.Save();
-            if (Changed != null) Changed();
+            base.OnMouseMove(e);
+            if (drag) MoveTo(e.Location);
+            else Cursor = CardRect.Contains(e.Location) ? Cursors.SizeAll : Cursors.Default;
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); drag = false; }
+
+        void MoveTo(Point p)
+        {
+            int m = Margin_, h = Card.Height;
+            left = p.X < screen.Width / 2;
+            y = Math.Max(0, Math.Min(1, (p.Y - grabDy - m) / (double)Math.Max(1, screen.Height - h - m * 2)));
+            Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = Begin(e);
-            Rectangle s = Screen_, c = Card_;
-            float a = Enabled ? 1 : 0.4f;
-            Ui.FillRound(g, s, S(6), C.Chrome);
-            Ui.StrokeRound(g, new RectangleF(s.X + 0.5f, s.Y + 0.5f, s.Width - 1, s.Height - 1), S(6), Ui.Mix(C.Stroke, C.Text, 0.1f * hover.Value), 1);
-            g.SetClip(s);
-            using (System.Drawing.Drawing2D.GraphicsPath p = Ui.Round(left ? new RectangleF(c.X - S(8), c.Y, c.Width + S(8), c.Height) : new RectangleF(c.X, c.Y, c.Width + S(8), c.Height), S(4)))
-            using (SolidBrush b = new SolidBrush(Ui.Alpha(drag ? C.ControlHi : C.Control, (int)(255 * a)))) g.FillPath(b, p);
-            g.ResetClip();
-            int d = c.Height * 55 / 100, lx = c.X + S(5), cy = c.Y + c.Height / 2;
-            Ui.FillRound(g, new RectangleF(lx, cy - d / 2f, d, d), d / 3f, Ui.Alpha(C.Accent, (int)(255 * a)));
-            int tx = lx + d + S(5), tw = c.Right - tx - S(6);
-            Ui.FillRound(g, new RectangleF(tx, cy - S(4), tw * 0.55f, S(3)), S(1.5f), Ui.Alpha(Color.White, (int)(230 * a)));
-            Ui.FillRound(g, new RectangleF(tx, cy + S(2), tw * 0.85f, S(2.5f)), S(1.2f), Ui.Alpha(C.Sub, (int)(200 * a)));
+            Graphics g = e.Graphics;
+            if (backdrop != null) g.DrawImageUnscaled(backdrop, 0, 0); else g.Clear(Color.FromArgb(14, 13, 20));
+            Rectangle r = CardRect;
+            using (Pen guide = new Pen(Color.FromArgb(90, 255, 255, 255), 1) { DashStyle = DashStyle.Dash })
+            {
+                int gx = left ? S(2) : screen.Width - S(3);
+                g.DrawLine(guide, gx, Margin_, gx, screen.Height - Margin_);
+            }
+            g.DrawImageUnscaled(Card, r.X, r.Y);
+            Rectangle tr = new Rectangle(0, screen.Height / 2 - S(60), screen.Width, S(34));
+            Ui.TextCenter(g, "Drag the notice to where you want it", Ui.F(16, 4), tr, Color.White);
+            Ui.TextCenter(g, "Either side of the screen, any height. Arrow keys work too. Enter saves, Esc cancels.", Ui.F(10, 0), new Rectangle(0, tr.Bottom + S(4), screen.Width, S(24)), Color.FromArgb(205, 205, 215));
+        }
+
+        protected override void OnShown(EventArgs e) { base.OnShown(e); Activate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { if (backdrop != null) backdrop.Dispose(); if (cardL != null) cardL.Dispose(); if (cardR != null) cardR.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 

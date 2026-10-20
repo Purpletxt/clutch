@@ -526,14 +526,14 @@ namespace Clutch
             updateTimer.Interval = 15000;
             updateTimer.Tick += delegate
             {
-                updateTimer.Interval = 3600 * 1000;
+                updateTimer.Interval = 5 * 60 * 1000;
                 if (Settings.Cur.AutoUpdate) CheckForUpdate(false);
             };
             updateTimer.Start();
             newsTimer.Interval = 12000;
             newsTimer.Tick += delegate
             {
-                newsTimer.Interval = 15 * 60 * 1000;
+                newsTimer.Interval = 5 * 60 * 1000;
                 Licence.CheckRevokedAsync(this, delegate { Program.InviteRevoked = true; Quit(); });
                 Announce.CheckAsync(this, ShowAnnouncement);
             };
@@ -569,6 +569,16 @@ namespace Clutch
             Settings.Cur.ShownAnnouncement = Announce.Id; Settings.Save();
             string msg = Announce.Message.Replace("\r", "").Replace("\n", " ");
             SavedOverlay.Pop(Announce.Title.Length > 0 ? Announce.Title : "Announcement", msg, true, NoticeScreen(), Math.Min(12000, 8000 + msg.Length * 30));
+        }
+
+        public void EditNoticePosition()
+        {
+            Rectangle scr = NoticeScreen();
+            using (OverlayEditor ed = new OverlayEditor(scr))
+            {
+                ed.ShowDialog(this);
+                if (ed.Saved) SavedOverlay.Pop("Clipped!", "This is where it'll show", true, scr);
+            }
         }
 
         static Rectangle NoticeScreen()

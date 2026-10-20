@@ -12,6 +12,44 @@ using System.Windows.Forms;
 
 namespace Clutch
 {
+    static class Web
+    {
+        static readonly Dictionary<string, string> tags = new Dictionary<string, string>(), bodies = new Dictionary<string, string>();
+
+        public static string Get(string url, string accept, out bool changed)
+        {
+            changed = true;
+            if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return File.ReadAllText(url);
+            ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
+            HttpWebRequest r = (HttpWebRequest)WebRequest.Create(url);
+            r.UserAgent = "Clutch/" + AppInfo.Version; r.Timeout = 15000; r.ReadWriteTimeout = 15000;
+            r.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            if (accept != null) r.Accept = accept;
+            string tag; lock (tags) if (tags.TryGetValue(url, out tag)) r.Headers[HttpRequestHeader.IfNoneMatch] = tag;
+            try
+            {
+                using (HttpWebResponse resp = (HttpWebResponse)r.GetResponse())
+                using (StreamReader rd = new StreamReader(resp.GetResponseStream(), System.Text.Encoding.UTF8))
+                {
+                    string body = rd.ReadToEnd();
+                    string et = resp.Headers[HttpResponseHeader.ETag];
+                    lock (tags) { if (!string.IsNullOrEmpty(et)) { tags[url] = et; bodies[url] = body; } }
+                    return body;
+                }
+            }
+            catch (WebException ex)
+            {
+                HttpWebResponse resp = ex.Response as HttpWebResponse;
+                if (resp != null && resp.StatusCode == HttpStatusCode.NotModified)
+                {
+                    changed = false;
+                    lock (tags) { string b; return bodies.TryGetValue(url, out b) ? b : ""; }
+                }
+                throw;
+            }
+        }
+    }
+
     static class Updater
     {
         public const string Repo = "Purpletxt/clutch";
@@ -63,19 +101,19 @@ namespace Clutch
             });
         }
 
-        static WebClient Client()
-        {
-            ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
-            WebClient w = new WebClient();
-            w.Headers[HttpRequestHeader.UserAgent] = "Clutch/" + AppInfo.Version;
-            w.Headers[HttpRequestHeader.Accept] = "application/vnd.github+json";
-            return w;
-        }
+        static Release last;
 
         public static Release Fetch()
         {
-            string json;
-            using (WebClient w = Client()) { w.Encoding = System.Text.Encoding.UTF8; json = w.DownloadString(Feed); }
+            bool changed;
+            string json = Web.Get(Feed, "application/vnd.github+json", out changed);
+            if (!changed) return last;
+            last = Parse(json);
+            return last;
+        }
+
+        static Release Parse(string json)
+        {
             Dictionary<string, object> d = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
             if (d == null) return null;
             Release r = new Release();

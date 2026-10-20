@@ -70,7 +70,7 @@ namespace Clutch
         Toggle tEnabled, tDesktop, tMic, tGamesOnly, tStartup, tTray, tOverlay, tSound, tDiscord, tUpdate, tAdvanced, tDetect, tClean;
         Seg sCleanDays, sCleanSize; Row rScreen, rCleanDays, rCleanSize, rFps;
         static readonly int[] CleanDays = { 7, 14, 30, 90, 0 }, CleanSizes = { 10, 25, 50, 100, 0 };
-        OverlayPicker pOverlay;
+        Btn bPosition; Row rPosition;
         Seg sLength, sFps, sQuality, sRes, sCapture; Drop dMonitor, dEncoder, dDesktop, dMic; Btn bHotkey, bFfmpeg, bFolder, bOpenFolder, bLog, bAddApp, bBrowse, bUpdate, bReport;
         Slider micVol; Meter mDesktop, mMic;
         Row rMemory, rRes, rEncoder, rFfmpeg, rFolder, rDesktopDev, rMicDev, rMicVol, rHotkey, rUpdate;
@@ -167,12 +167,11 @@ namespace Clutch
             AddRow(c, "Start with Windows", "Opens quietly in the tray when you sign in.", tStartup, 60);
             tTray = new Toggle(); tTray.Changed += delegate { if (loading) return; s.CloseToTray = tTray.On; Settings.Save(); };
             AddRow(c, "Keep running in the tray when closed", "So the clip key keeps working after you close the window.", tTray, 60);
-            tOverlay = new Toggle(); tOverlay.Changed += delegate { if (loading) return; s.Overlay = tOverlay.On; Settings.Save(); pOverlay.Enabled = s.Overlay; };
+            tOverlay = new Toggle(); tOverlay.Changed += delegate { if (loading) return; s.Overlay = tOverlay.On; Settings.Save(); bPosition.Enabled = s.Overlay; };
             AddRow(c, "Show \"Clipped!\" over the game", "A small notice that slides in from the edge of the screen. It never appears in your clips.", tOverlay, 60);
-            pOverlay = new OverlayPicker();
-            pOverlay.Changed += delegate { SavedOverlay.Pop("Clipped!", "This is where it'll show", true, Recorder.MonitorBounds(s.Monitor)); };
-            Row rPos = AddRow(c, "Notification position", "Drag the notice up or down the edge, or across to the other side. Let go to see it on your screen.", pOverlay, 190);
-            rPos.MinH = 128; rPos.CtlH = 104;
+            bPosition = new Btn("Move on screen", "", BtnStyle.Standard);
+            bPosition.Click += delegate { Main.EditNoticePosition(); Tick(); };
+            rPosition = AddRow(c, "Notification position", "", bPosition, 160);
             tSound = new Toggle(); tSound.Changed += delegate { if (loading) return; s.SaveSound = tSound.On; Settings.Save(); };
             AddRow(c, "Play a sound when a clip is saved", "", tSound, 60);
             tDiscord = new Toggle(); tDiscord.Changed += delegate { if (loading) return; s.DiscordStatus = tDiscord.On; Settings.Save(); Main.Sync(); };
@@ -255,7 +254,7 @@ namespace Clutch
             sCleanDays.Set(Array.IndexOf(CleanDays, s.CleanDays) < 0 ? 2 : Array.IndexOf(CleanDays, s.CleanDays));
             sCleanSize.Set(Array.IndexOf(CleanSizes, s.CleanGB) < 0 ? 2 : Array.IndexOf(CleanSizes, s.CleanGB));
             ShowAdvanced(); CleanRows();
-            tStartup.Set(Settings.StartWithWindows); tTray.Set(s.CloseToTray); tOverlay.Set(s.Overlay); pOverlay.Load(); pOverlay.Enabled = s.Overlay; tSound.Set(s.SaveSound); tDiscord.Set(s.DiscordStatus); if (tUpdate != null) tUpdate.Set(s.AutoUpdate);
+            tStartup.Set(Settings.StartWithWindows); tTray.Set(s.CloseToTray); tOverlay.Set(s.Overlay); bPosition.Enabled = s.Overlay; tSound.Set(s.SaveSound); tDiscord.Set(s.DiscordStatus); if (tUpdate != null) tUpdate.Set(s.AutoUpdate);
             dMonitor.Items.Clear();
             Screen[] all = Screen.AllScreens; int n = 1;
             foreach (Screen sc in all) if (sc.Primary) dMonitor.Items.Add("Screen " + n++ + " (main)  \u00B7  " + sc.Bounds.Width + " \u00D7 " + sc.Bounds.Height);
@@ -320,6 +319,8 @@ namespace Clutch
             SetDesc(rFolder, s.Folder + free);
             string ff = Main.Downloading ? "Downloading\u2026 " + Main.DownloadPercent + "%" : FFmpeg.Ready ? "Installed" + (FFmpeg.Version.Length > 0 ? " (" + FFmpeg.Version + ")" : "") + " from " + FFmpeg.Source + "." : Main.DownloadError.Length > 0 ? Main.DownloadError : "Not installed yet. Needed for recording.";
             SetDesc(rFfmpeg, ff);
+            double oy = s.OverlayY;
+            SetDesc(rPosition, "Shows on the " + (s.OverlaySide == 1 ? "left" : "right") + " edge, " + (oy < 0.2 ? "near the top" : oy > 0.8 ? "near the bottom" : oy < 0.4 ? "in the upper half" : oy > 0.6 ? "in the lower half" : "in the middle") + ". Drag it into place on your actual screen.");
             Updater.Release up = Updater.Available;
             SetDesc(rUpdate, !Updater.Configured ? "Updates aren't switched on in this build." : Updater.Checking ? "Checking for updates\u2026"
                 : up != null ? "Version " + up.Version + " is ready to install. Clutch closes, updates and opens again in a few seconds."
