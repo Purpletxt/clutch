@@ -6,11 +6,14 @@ set REFS=/r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.
 set OPTS=/nologo /target:winexe /platform:x64 /optimize+ /unsafe /codepage:65001 %REFS%
 if exist logo.png set OPTS=%OPTS% /resource:logo.png,logo.png
 if exist icon.ico set OPTS=%OPTS% /win32icon:icon.ico
+if exist Clutch.manifest set OPTS=%OPTS% /win32manifest:Clutch.manifest
 set OUT=Clutch.exe
+set SRC=src\*.cs
 if /i "%~1"=="dev" set OUT=Clutch-dev.exe
 if /i "%~1"=="dev" set OPTS=%OPTS% /define:DEV
+if /i "%~1"=="dev" set SRC=%SRC% dev\*.cs
 
-"%CSC%" %OPTS% /out:%OUT% src\*.cs || goto fail
+"%CSC%" %OPTS% /out:%OUT% %SRC% || goto fail
 echo Built %OUT%
 if /i not "%~1"=="dev" copy /y Clutch.exe ClutchSetup.exe >nul && echo Built ClutchSetup.exe
 exit /b 0
