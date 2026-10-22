@@ -21,6 +21,20 @@ namespace Clutch
         public static event Action Changed;
         public static readonly AudioSource Desktop = new AudioSource(true, "desktop");
         public static readonly AudioSource Mic = new AudioSource(false, "mic");
+        public static readonly AudioSource Game = new AudioSource(true, "game"), Other = new AudioSource(true, "other");
+        static int gamePid;
+
+        public static bool SplitActive { get { return Game.Running && Other.Running; } }
+
+        public static void SetGame(int pid)
+        {
+            Settings s = Settings.Cur;
+            bool want = wantRunning && s.DesktopAudio && s.SplitGameAudio && pid > 0 && ProcessLoopback.Supported;
+            if (!want) { if (Game.Running) Game.Stop(); if (Other.Running) Other.Stop(); gamePid = 0; return; }
+            if (pid == gamePid && Game.Running && Other.Running) return;
+            gamePid = pid;
+            Game.StartProcess(pid, false, s.BufferSeconds); Other.StartProcess(pid, true, s.BufferSeconds);
+        }
 
         static Process proc;
         static Thread reader, starter;
@@ -68,7 +82,7 @@ namespace Clutch
         {
             wantRunning = false;
             KillProcess();
-            Desktop.Stop(); Mic.Stop();
+            Desktop.Stop(); Mic.Stop(); Game.Stop(); Other.Stop(); gamePid = 0;
             lock (gate) { chunks.Clear(); pool.Clear(); bytesHeld = 0; lastPts = -1; }
             Fire(State.Off, "Off");
         }
@@ -79,6 +93,7 @@ namespace Clutch
             Settings s = Settings.Cur;
             if (s.DesktopAudio) Desktop.Start(s.DesktopDevice, s.BufferSeconds); else Desktop.Stop();
             if (s.Mic) Mic.Start(s.MicDevice, s.BufferSeconds); else Mic.Stop();
+            gamePid = 0; SetGame(Games.RunningPid);
         }
 
         static void KillProcess()
@@ -108,6 +123,7 @@ namespace Clutch
 
                 if (s.DesktopAudio) Desktop.Start(s.DesktopDevice, s.BufferSeconds); else Desktop.Stop();
                 if (s.Mic) Mic.Start(s.MicDevice, s.BufferSeconds); else Mic.Stop();
+                gamePid = 0; SetGame(Games.RunningPid);
                 Launch();
             }
             catch (Exception ex) { Log.Error("Recorder start", ex); Fire(State.Error, ex.Message); }
@@ -351,7 +367,7 @@ namespace Clutch
                 startPts = chunks[first].Pts; endPts = lastPts + 90000L / Math.Max(1, fps);
                 patC = pat; pmtC = pmt; offset = minOffset;
             }
-            string ts = Paths.NewTemp(".ts"), wavD = null, wavM = null;
+            string ts = Paths.NewTemp(".ts"), wavD = null, wavM = null, wavG = null, wavO = null;
             bool released = false;
             try
             {
@@ -371,6 +387,11 @@ namespace Clutch
                 LastClipStart = a;
                 if (Desktop.Running) { wavD = Paths.NewTemp(".wav"); if (!Desktop.WriteWav(a, b, wavD)) wavD = null; }
                 if (Mic.Running) { wavM = Paths.NewTemp(".wav"); if (!Mic.WriteWav(a, b, wavM)) wavM = null; }
+                if (wavD != null && SplitActive && Game.Covers(a) && Other.Covers(a))
+                {
+                    wavG = Paths.NewTemp(".wav"); wavO = Paths.NewTemp(".wav");
+                    if (!Game.WriteWav(a, b, wavG) || !Other.WriteWav(a, b, wavO)) { try { File.Delete(wavG); File.Delete(wavO); } catch { } wavG = wavO = null; }
+                }
 
                 Directory.CreateDirectory(Settings.Cur.Folder);
                 string name = Library.SafeName((string.IsNullOrEmpty(game) ? "Clip" : game) + " " + DateTime.Now.ToString("d MMM HH.mm"));
@@ -378,19 +399,33 @@ namespace Clutch
                 string part = outPath + ".part";
 
                 string args = "-y -hide_banner -loglevel warning -fflags +genpts -i " + FFmpeg.Q(ts);
-                if (wavD != null) args += " -i " + FFmpeg.Q(wavD);
-                if (wavM != null) args += " -i " + FFmpeg.Q(wavM);
+                int ni = 1, iD = -1, iM = -1, iG = -1, iO = -1;
+                if (wavD != null) { args += " -i " + FFmpeg.Q(wavD); iD = ni++; }
+                if (wavM != null) { args += " -i " + FFmpeg.Q(wavM); iM = ni++; }
+                if (wavG != null) { args += " -i " + FFmpeg.Q(wavG); iG = ni++; }
+                if (wavO != null) { args += " -i " + FFmpeg.Q(wavO); iO = ni++; }
                 args += " -map 0:v:0 -c:v copy";
-                double micGain = Settings.Cur.MicVolume / 100.0;
-                if (wavD != null && wavM != null)
+                bool split = iG > 0 && iO > 0;
+                List<string> maps = new List<string>(), names = new List<string>();
+                if (iD > 0 && iM > 0)
                 {
-                    args += " -filter_complex \"[2:a]volume=" + FFmpeg.N(micGain) + "[mv];[1:a][mv]amix=inputs=2:duration=longest:normalize=0[mix]\""
-                          + " -map [mix] -map 1:a -map 2:a -c:a aac -b:a 192k"
-                          + " -metadata:s:a:0 handler_name=\"Game + Mic\" -metadata:s:a:1 handler_name=Game -metadata:s:a:2 handler_name=Mic"
-                          + " -disposition:a:0 default -disposition:a:1 0 -disposition:a:2 0";
+                    args += " -filter_complex \"[" + iM + ":a]volume=" + FFmpeg.N(Settings.Cur.MicVolume / 100.0) + "[mv];[" + iD + ":a][mv]amix=inputs=2:duration=longest:normalize=0[mix]\"";
+                    maps.Add("[mix]"); names.Add("Game + Mic");
                 }
-                else if (wavD != null) args += " -map 1:a -c:a aac -b:a 192k -metadata:s:a:0 handler_name=Game";
-                else if (wavM != null) args += " -map 1:a -c:a aac -b:a 160k -metadata:s:a:0 handler_name=Mic";
+                else if (iD > 0) { maps.Add(iD + ":a"); names.Add("Game"); }
+                else if (iM > 0) { maps.Add(iM + ":a"); names.Add("Mic"); }
+                if (split || (iD > 0 && iM > 0))
+                {
+                    maps.Add((split ? iG : iD) + ":a"); names.Add(split ? "Game only" : "Game");
+                    if (iM > 0) { maps.Add(iM + ":a"); names.Add("Mic"); }
+                    if (split) { maps.Add(iO + ":a"); names.Add("Other apps"); }
+                }
+                if (maps.Count > 0)
+                {
+                    foreach (string m in maps) args += " -map " + m;
+                    args += " -c:a aac -b:a 192k";
+                    for (int i = 0; i < names.Count; i++) args += " -metadata:s:a:" + i + " handler_name=\"" + names[i] + "\" -disposition:a:" + i + (i == 0 ? " default" : " 0");
+                }
                 args += " -metadata comment=\"Saved with Clutch\" -movflags +faststart -f mp4 " + FFmpeg.Q(part);
 
                 long tsBytes = new FileInfo(ts).Length;
@@ -426,7 +461,7 @@ namespace Clutch
             finally
             {
                 if (!released) lock (gate) saveHold--;
-                foreach (string f in new[] { ts, wavD, wavM }) if (f != null) try { File.Delete(f); } catch { }
+                foreach (string f in new[] { ts, wavD, wavM, wavG, wavO }) if (f != null) try { File.Delete(f); } catch { }
             }
             return res;
         }

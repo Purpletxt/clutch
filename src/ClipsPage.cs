@@ -9,37 +9,56 @@ namespace Clutch
 {
     class ClipsPage : Page
     {
-        readonly Btn import = new Btn("Import", "\uE8B5", BtnStyle.Subtle);
-        readonly Lbl title = new Lbl("Clips", 18, 4, C.Text), count = new Lbl("", 9.5f, 1, C.Faint);
+        readonly Btn import = new Btn("Import", Glyph.Import, BtnStyle.Standard);
+        readonly Lbl title = new Lbl("Clips", 24, 4, C.Text), count = new Lbl("", 10.5f, 1, C.Faint);
         readonly Drop game = new Drop(), sort = new Drop();
-        readonly Btn favs = new Btn("Favourites", Glyph.Star, BtnStyle.Subtle);
-        readonly Field search = new Field();
+        bool favOnly;
         readonly SetupBanner banner;
         readonly ClipGrid grid;
+        readonly GameChips chips = new GameChips();
+        readonly Btn selDiscord = new Btn("Discord", Glyph.Discord, BtnStyle.Standard), selGame = new Btn("Game", Glyph.Game, BtnStyle.Standard), selMove = new Btn("Move", Glyph.Folder, BtnStyle.Standard);
         readonly Btn selFav = new Btn("Favourite", Glyph.Star, BtnStyle.Standard), selCopy = new Btn("Copy", Glyph.Copy, BtnStyle.Standard),
                      selDelete = new Btn("Delete", Glyph.Delete, BtnStyle.Danger), selClear = new Btn("Cancel", Glyph.Close, BtnStyle.Subtle);
         List<string> gameNames = new List<string>();
         static readonly string[] Sorts = { "Newest first", "Oldest first", "Longest first", "Biggest first", "Name A\u2013Z" };
+        int lineY;
+        readonly Btn fold = new Btn("", Glyph.Up, BtnStyle.Subtle);
+        bool Folded { get { return favOnly ? Settings.Cur.FoldFavourites : Settings.Cur.FoldClips; } }
 
         public ClipsPage(MainForm m) : base(m)
         {
-            search.Icon = Glyph.Search; search.Placeholder = "Search"; search.Box.TabStop = false;
-            search.Box.TextChanged += delegate { Refresh(); };
-            import.Click += delegate { Import(); };
-            favs.Click += delegate { ShowFavourites(!favs.On); Main.Rail.Invalidate(); };
+            fold.IconPt = 9; fold.Tip = "Show or hide the header";
+            fold.Click += delegate { if (favOnly) Settings.Cur.FoldFavourites = !Settings.Cur.FoldFavourites; else Settings.Cur.FoldClips = !Settings.Cur.FoldClips; Settings.Save(); Relayout(); };
+            import.Click += delegate { ImportMenu(import, new Point(0, import.Height + S(4))); };
+            chips.Picked += delegate (string n) { game.Index = n == null ? 0 : gameNames.IndexOf(n) + 1; Refresh(); };
+            chips.AddGame += delegate { Main.Go(Main.SettingsP); Main.SettingsP.ScrollTo("games"); };
             game.Changed += delegate { Refresh(); };
             sort.Items.AddRange(Sorts); sort.Index = 0; sort.Changed += delegate { Refresh(); };
+            sort.IconAt = delegate (int i) { return "\uE8CB"; }; sort.Width = S(180);
+            game.Width = S(170);
             banner = new SetupBanner(m);
             grid = new ClipGrid(m);
             grid.SelectionChanged += delegate { Relayout(); };
             selFav.Click += delegate { List<Clip> l = Sel(); bool all = l.TrueForAll(delegate (Clip c) { return c.Favorite; }); foreach (Clip c in l) c.Favorite = !all; Library.Save(); grid.ClearSelection(); Refresh(); };
             selCopy.Click += delegate { Main.CopyClips(Sel()); };
+            selDiscord.Click += delegate { DiscordShare.Menu(Main, Sel(), selDiscord, new Point(0, selDiscord.Height + S(4))); };
+            selGame.Click += delegate { BulkGame(); };
+            selMove.Click += delegate { BulkMove(); };
             selDelete.Click += delegate { List<Clip> l = Sel(); grid.ClearSelection(); Main.DeleteClips(l); };
             selClear.Click += delegate { grid.ClearSelection(); };
-            foreach (Control c in new Control[] { title, count, game, favs, sort, search, import, selFav, selCopy, selDelete, selClear, banner, grid }) Controls.Add(c);
+            foreach (Control c in new Control[] { title, count, fold, selFav, selCopy, selDiscord, selGame, selMove, selDelete, selClear, chips, banner, grid }) Controls.Add(c);
         }
 
-        public bool FavouritesOnly { get { return favs.On; } }
+        public Control[] Tools
+        {
+            get
+            {
+                game.Visible = false;
+                return Settings.Cur.GameChips ? new Control[] { sort, import } : new Control[] { game, sort, import };
+            }
+        }
+
+        public bool FavouritesOnly { get { return favOnly; } }
         List<Clip> Sel() { return new List<Clip>(grid.Selected); }
         public void SelectAll() { grid.SelectAll(); }
 #if DEV
@@ -57,37 +76,47 @@ namespace Clutch
 
         public void ShowGame(string name)
         {
-            favs.On = false; favs.Icon = Glyph.Star; search.Box.Text = "";
+            favOnly = false; Main.Bar.ClearSearch();
             Refresh();
             int i = gameNames.IndexOf(name); game.Index = i >= 0 ? i + 1 : 0;
             Refresh();
         }
-        public void ShowFavourites(bool on) { favs.On = on; favs.Icon = on ? Glyph.StarFill : Glyph.Star; favs.Invalidate(); Refresh(); }
+        public void ShowFavourites(bool on) { favOnly = on; Refresh(); }
+        public void LayoutChanged() { if (Main.Current == this) Main.Bar.SetTools(Tools); Refresh(); }
+
+        protected override void OnPaintBackground(PaintEventArgs e) { Backdrop.Draw(e.Graphics, ClientSize, Point.Empty); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (lineY > 0) using (Pen p = new Pen(Ui.Mix(C.Bg, C.Text, 0.07f))) e.Graphics.DrawLine(p, S(24), lineY, ClientSize.Width - S(24), lineY);
+        }
 
         public override void Relayout()
         {
-            int pad = S(24), w = ClientSize.Width, y = S(18), h = S(34);
+            int pad = S(24), w = ClientSize.Width, y = S(10), h = S(36);
             int right = w - pad;
             bool selecting = grid.Selected.Count > 0;
-            foreach (Control c in new Control[] { game, favs, sort, search, import }) c.Visible = !selecting;
-            foreach (Control c in new Control[] { selFav, selCopy, selDelete, selClear }) c.Visible = selecting;
+            foreach (Control c in new Control[] { selFav, selCopy, selDiscord, selGame, selMove, selDelete, selClear }) c.Visible = selecting;
             if (selecting)
             {
-                foreach (Btn b in new[] { selClear, selDelete, selCopy, selFav }) { b.Height = h; b.Width = b.PreferredWidth(); b.Location = new Point(right - b.Width, y); right = b.Left - S(8); }
+                foreach (Btn b in new[] { selClear, selDelete, selMove, selGame, selDiscord, selCopy, selFav }) { b.Height = h; b.Width = b.PreferredWidth(); b.Location = new Point(right - b.Width, y + S(6)); right = b.Left - S(8); }
                 title.Text = grid.Selected.Count + " selected";
             }
-            else title.Text = favs.On ? "Favourites" : "Clips";
-            import.Height = h; import.Width = import.PreferredWidth(); import.Location = new Point(right - import.Width + S(6), y); right = import.Left - S(6);
-            int sw = Math.Max(S(140), Math.Min(S(220), (w - S(560)) / 3));
-            search.SetBounds(right - sw, y, sw, h); right = search.Left - S(8);
-            sort.SetBounds(right - S(140), y, S(140), h); right = sort.Left - S(8);
-            favs.Height = h; favs.Width = favs.PreferredWidth(); favs.Location = new Point(right - favs.Width, y); right = favs.Left - S(8);
-            game.SetBounds(right - S(150), y, S(150), h); right = game.Left - S(16);
-            int tw = Ui.Measure(title.Text, Ui.F(18, 4)).Width + S(4);
-            title.SetBounds(pad, y - S(2), tw, h + S(4));
-            count.SetBounds(title.Right + S(10), y + S(2), Math.Max(0, right - title.Right - S(10)), h);
-            count.Visible = !selecting && count.Width > S(50);
-            y += h + S(16);
+            else title.Text = favOnly ? "Favourites" : "Clips";
+            bool folded = Folded;
+            float tp = folded ? 15 : 24; title.Pt = tp; count.Pt = folded ? 9.5f : 10.5f;
+            int tw = Ui.Measure(title.Text, Ui.F(tp, 4)).Width + S(4), th = folded ? S(32) : S(48);
+            title.SetBounds(pad - S(2), y, tw, th);
+            int cw = Ui.Measure(count.Text, Ui.F(count.Pt, 1)).Width + S(6);
+            count.SetBounds(title.Right + S(10), y + (folded ? S(2) : S(8)), cw, th - (folded ? S(2) : S(8)));
+            count.Visible = !selecting;
+            fold.Visible = !selecting; fold.Icon = folded ? Glyph.Down : Glyph.Up;
+            fold.SetBounds((count.Visible ? count.Right : title.Right) + S(6), y + (th - S(30)) / 2 + (folded ? 0 : S(3)), S(30), S(30)); fold.Invalidate();
+            y += th + (folded ? S(6) : S(14));
+            chips.Visible = !folded && Settings.Cur.GameChips && gameNames.Count > 0;
+            if (chips.Visible) { chips.SetBounds(pad, y, w - pad * 2, S(40)); y += S(40) + S(18); }
+            lineY = y; y += S(18);
             bool setup = !FFmpeg.Ready; banner.Visible = setup;
             if (setup) { banner.SetBounds(pad, y, w - pad * 2, S(118)); y += S(118) + S(16); }
             grid.SetBounds(pad - S(4), y, w - pad * 2 + S(8), ClientSize.Height - y);
@@ -103,12 +132,18 @@ namespace Clutch
             gameNames = names;
             game.Items.Clear(); game.Items.Add("All games"); game.Items.AddRange(names);
             game.Index = chosen != null && names.Contains(chosen) ? names.IndexOf(chosen) + 1 : 0;
+            Dictionary<string, int> per = new Dictionary<string, int>();
+            foreach (Clip c in Library.Clips) if (c.Game.Length > 0) { int k; per.TryGetValue(c.Game, out k); per[c.Game] = k + 1; }
+            List<string> byCount = new List<string>(names);
+            byCount.Sort(delegate (string a, string b) { int d = per[b].CompareTo(per[a]); return d != 0 ? d : string.Compare(a, b, StringComparison.OrdinalIgnoreCase); });
+            List<int> counts = new List<int>(); foreach (string gn in byCount) counts.Add(per[gn]);
+            chips.Set(byCount, counts, Library.Clips.Count, game.Index > 0 ? names[game.Index - 1] : null);
 
-            string q = search.Box.Text.Trim();
+            string q = Main.Bar.Query;
             List<Clip> list = new List<Clip>();
             foreach (Clip c in Library.Clips)
             {
-                if (favs.On && !c.Favorite) continue;
+                if (favOnly && !c.Favorite) continue;
                 if (game.Index > 0 && c.Game != gameNames[game.Index - 1]) continue;
                 if (q.Length > 0 && c.Title.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0 && c.Game.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 list.Add(c);
@@ -120,7 +155,7 @@ namespace Clutch
                 case 3: list.Sort(delegate (Clip a, Clip b) { return b.Size.CompareTo(a.Size); }); break;
                 case 4: list.Sort(delegate (Clip a, Clip b) { return string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase); }); break;
             }
-            grid.Set(list, q.Length > 0 || favs.On || game.Index > 0, favs.On, sort.Index <= 1);
+            grid.Set(list, q.Length > 0 || favOnly || game.Index > 0, favOnly, sort.Index <= 1);
             int n = list.Count;
             count.Text = n == 1 ? "1 clip" : n + " clips";
             Relayout();
@@ -129,9 +164,54 @@ namespace Clutch
         }
 
         public override void Entered() { Refresh(); }
-        public void FreeMemory() { grid.FreeCache(null); }
+        public void FreeMemory() { grid.FreeCache(null); grid.FreeBackdrop(); }
 
-        void Import()
+        void BulkGame()
+        {
+            List<Clip> l = Sel(); if (l.Count == 0) return;
+            string g = RenameDialog.AskGame(Main, l[0].Game, Library.KnownGames());
+            if (g == null) return;
+            foreach (Clip c in l) c.Game = Games.Clean(g);
+            Library.Save(); grid.ClearSelection(); Refresh(); Main.GamesP.Refresh();
+            Main.Toast.Show(Glyph.Game, (l.Count == 1 ? "1 clip" : l.Count + " clips") + (g.Trim().Length > 0 ? " now belong to " + Games.Clean(g) + "." : " no longer have a game."), null, null, 4000);
+        }
+
+        void BulkMove()
+        {
+            List<Clip> l = Sel(); if (l.Count == 0) return;
+            string dir = FolderPicker.Pick(Main, "Move clips to", Environment.GetFolderPath(Environment.SpecialFolder.MyVideos));
+            if (dir == null) return;
+            if (string.Equals(Path.GetFullPath(dir).TrimEnd('\\'), Path.GetFullPath(Settings.Cur.Folder).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) { Main.Toast.Show(Glyph.Info, "Those clips are already in that folder.", null, null, 4000); return; }
+            if (ChoiceDialog.Ask(Main, "Move " + (l.Count == 1 ? "1 clip" : l.Count + " clips") + "?", "They'll move to " + dir + " and leave Clutch's library. Favourites and game names stay behind.", Glyph.Folder, "Move", "Cancel") != 0) return;
+            grid.ClearSelection();
+            if (Main.Viewer.Clip != null && l.Contains(Main.Viewer.Clip)) Main.Viewer.Video.Close();
+            if (Main.Trim.Clip != null && l.Contains(Main.Trim.Clip)) Main.Trim.Video.Close();
+            List<string> paths = new List<string>(); foreach (Clip c in l) paths.Add(c.Path);
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                int moved = 0, failed = 0;
+                foreach (string p in paths)
+                {
+                    try { MedalImport.Transfer(p, Library.UniquePath(Path.Combine(dir, Path.GetFileName(p))), true); moved++; }
+                    catch (Exception ex) { failed++; Log.Info("Move clips", Path.GetFileName(p) + ": " + ex.Message); }
+                }
+                DiscordFit.Post(Main, delegate
+                {
+                    Library.Rescan();
+                    Main.Toast.Show(failed > 0 ? Glyph.Warning : Glyph.Folder, "Moved " + (moved == 1 ? "1 clip" : moved + " clips") + " to " + dir + "." + (failed > 0 ? " " + failed + " couldn't be moved." : ""), "Show", delegate { try { System.Diagnostics.Process.Start("explorer.exe", "\"" + dir + "\""); } catch { } }, 7000);
+                });
+            });
+        }
+
+        public void ImportMenu(Control anchor, Point at)
+        {
+            ContextMenuStrip m = Menus.Make();
+            Menus.Item(m, "Video files\u2026", Glyph.Film, delegate { Import(); });
+            Menus.Item(m, "From Medal\u2026", Glyph.Import, delegate { MedalImport.Start(Main); });
+            m.Show(anchor, at);
+        }
+
+        public void Import()
         {
             using (OpenFileDialog d = new OpenFileDialog())
             {

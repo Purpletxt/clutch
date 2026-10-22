@@ -34,6 +34,7 @@ namespace Clutch
     class Btn : Ctl
     {
         public BtnStyle Style; public string Icon = ""; public float TextPt = 10, IconPt = 11; public bool On; public string Tip;
+        public float Progress = -1;
         public bool Round = false;
         public int Weight = 1;
         readonly Anim press;
@@ -68,6 +69,13 @@ namespace Clutch
             if (Style == BtnStyle.Accent && Enabled) Ui.FillAccent(g, r, rad, h * 0.12f - p * 0.1f, 255);
             else if (fill != Bg) Ui.FillRound(g, r, rad, fill);
             if (border != Color.Empty) Ui.StrokeRound(g, r, rad, border, 1);
+            if (Progress >= 0)
+                using (System.Drawing.Drawing2D.GraphicsPath pp = Ui.Round(r, rad))
+                {
+                    Region before = g.Clip; g.SetClip(pp, System.Drawing.Drawing2D.CombineMode.Intersect);
+                    using (SolidBrush pb = new SolidBrush(Color.FromArgb(60, 255, 255, 255))) g.FillRectangle(pb, r.X, r.Y, r.Width * Math.Min(1, Progress), r.Height);
+                    g.Clip = before;
+                }
 
             Font tf = Ui.F(TextPt, Weight);
             int tw = Text.Length > 0 ? Ui.Measure(Text, tf).Width : 0, iw = Icon.Length > 0 ? S(IconPt * 1.5f) : 0;
@@ -144,6 +152,7 @@ namespace Clutch
         public List<string> Items = new List<string>(); int index;
         public event EventHandler Changed;
         public string Placeholder = "";
+        public Func<int, string> IconAt;
         public Drop() { Cursor = Cursors.Hand; }
         public int Index { get { return index; } set { index = value; Invalidate(); } }
         protected override void OnClick(EventArgs e)
@@ -169,7 +178,10 @@ namespace Clutch
             Ui.FillRound(g, r, S(6), Ui.Mix(C.Control, C.ControlHi, h));
             Ui.StrokeRound(g, r, S(6), C.Stroke, 1);
             string t = index >= 0 && index < Items.Count ? Items[index] : Placeholder;
-            Ui.TextLeft(g, t, Ui.F(9.5f, 0), new Rectangle(S(12), 0, Width - S(40), Height), C.Text);
+            string ic = IconAt != null && index >= 0 ? IconAt(index) : "";
+            int tx = S(12);
+            if (!string.IsNullOrEmpty(ic)) { Ui.DrawIcon(g, ic, 10, new Rectangle(S(10), 0, S(20), Height), C.Text); tx = S(36); }
+            Ui.TextLeft(g, t, Ui.F(9.5f, 0), new Rectangle(tx, 0, Width - tx - S(28), Height), C.Text);
             Ui.DrawIcon(g, "\uE70D", 8, new Rectangle(Width - S(30), 0, S(22), Height), C.Sub);
         }
     }
@@ -179,6 +191,7 @@ namespace Clutch
         public int Min, Max = 100, Value; bool drag;
         public event EventHandler Changed;
         public string Suffix = "%";
+        public Func<int, string> Format;
         public Slider() { Cursor = Cursors.Hand; }
         int TrackW { get { return Width - S(56); } }
         void SetFrom(int x)
@@ -201,7 +214,7 @@ namespace Clutch
             using (SolidBrush b = new SolidBrush(C.ControlHi)) g.FillEllipse(b, x - d / 2, cy - d / 2, d, d);
             float d2 = S(8) + S(2) * hover.Value;
             using (SolidBrush b = new SolidBrush(Enabled ? C.Accent : C.Faint)) g.FillEllipse(b, x - d2 / 2, cy - d2 / 2, d2, d2);
-            Ui.TextRight(g, Value + Suffix, Ui.F(9.5f, 1), new Rectangle(tw, 0, Width - tw, Height), C.Sub);
+            Ui.TextRight(g, Format != null ? Format(Value) : Value + Suffix, Ui.F(9.5f, 1), new Rectangle(tw, 0, Width - tw, Height), C.Sub);
         }
     }
 
@@ -211,7 +224,7 @@ namespace Clutch
         public Lbl(string text, float pt, int weight, Color fore) { Text = text; Pt = pt; Weight = weight; Fore = fore; }
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics; g.Clear(Bg);
+            Graphics g = e.Graphics; if (Bg.A == 255) g.Clear(Bg);
             Rectangle r = new Rectangle(0, 0, Width, Height);
             if (Wraps) Ui.Wrap(g, Text, Ui.F(Pt, Weight), r, Fore);
             else if (Center) Ui.TextCenter(g, Text, Ui.F(Pt, Weight), r, Fore);
@@ -238,7 +251,8 @@ namespace Clutch
 
     class Field : Ctl
     {
-        public readonly TextBox Box = new TextBox(); public string Icon = ""; public string Placeholder = "";
+        public readonly TextBox Box = new TextBox(); public string Icon = ""; public string Placeholder = ""; public string[] Keys;
+        int KeysW() { if (Keys == null) return 0; int w = S(6); foreach (string k in Keys) w += Ui.Measure(k, Ui.F(8, 1)).Width + S(14) + S(4); return w; }
         public Field()
         {
             Box.BorderStyle = BorderStyle.None; Box.BackColor = C.Control; Box.ForeColor = C.Text;
@@ -253,7 +267,7 @@ namespace Clutch
             base.OnLayout(e);
             Box.Font = Ui.F(10, 0);
             int left = Icon.Length > 0 ? S(34) : S(12);
-            Box.SetBounds(left, (Height - Box.PreferredHeight) / 2 + 1, Width - left - S(10), Box.PreferredHeight);
+            Box.SetBounds(left, (Height - Box.PreferredHeight) / 2 + 1, Width - left - S(10) - KeysW(), Box.PreferredHeight);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -264,6 +278,18 @@ namespace Clutch
             Ui.StrokeRound(g, r, S(6), focus ? C.Accent : C.Stroke, 1);
             if (focus) using (Pen p = new Pen(C.Accent, S(2))) g.DrawLine(p, S(6), Height - S(1), Width - S(6), Height - S(1));
             if (Icon.Length > 0) Ui.DrawIcon(g, Icon, 10, new Rectangle(S(8), 0, S(22), Height), C.Sub);
+            if (Keys != null)
+            {
+                int x = Width - KeysW(), kh = Math.Min(S(26), Height - S(14));
+                foreach (string k in Keys)
+                {
+                    int kw = Ui.Measure(k, Ui.F(8, 1)).Width + S(14);
+                    Rectangle kr = new Rectangle(x, (Height - kh) / 2, kw, kh);
+                    Ui.FillRound(g, kr, S(5), C.ControlHi);
+                    Ui.TextCenter(g, k, Ui.F(8, 1), kr, C.Sub);
+                    x += kw + S(4);
+                }
+            }
         }
     }
 

@@ -30,7 +30,7 @@ namespace Clutch
         public ClipsPage Clips; public GamesPage GamesP; public ViewerPage Viewer; public TrimPage Trim; public SettingsPage SettingsP; public WelcomePage Welcome;
         Page current;
         public readonly Toast Toast = new Toast();
-        NotifyIcon tray; ToolStripMenuItem trayToggle, traySave, trayUpdate;
+        NotifyIcon tray; TrayItem trayToggle, traySave, trayUpdate, trayGame;
         readonly System.Windows.Forms.Timer gameTimer = new System.Windows.Forms.Timer(), uiTimer = new System.Windows.Forms.Timer(), cleanTimer = new System.Windows.Forms.Timer();
         bool quitting, closing, saving, lastWant, checkingGames;
         int gameMisses;
@@ -84,7 +84,7 @@ namespace Clutch
         {
             base.OnLayout(e);
             if (Bar == null || Rail == null) return;
-            int rw = S(76), th = S(58);
+            int rw = S(76), th = S(TopBar.Tall);
             Rail.SetBounds(0, 0, rw, ClientSize.Height);
             Bar.SetBounds(rw, 0, ClientSize.Width - rw, th);
             foreach (Control c in Controls) if (c is Page) c.SetBounds(rw, th, ClientSize.Width - rw, ClientSize.Height - th);
@@ -135,6 +135,7 @@ namespace Clutch
             bool leftVideo = (current == Viewer || current == Trim) && p != Viewer && p != Trim;
             if (current != null) { current.Leaving(); current.Visible = false; }
             if (leftVideo) TrimSoon();
+            Bar.SetTools(p == Clips ? Clips.Tools : null);
             current = p; p.Visible = true; p.Relayout(); p.Entered(); p.BringToFront();
             Toast.BringToFront();
             Bar.Invalidate();
@@ -142,12 +143,18 @@ namespace Clutch
         }
         public Page Current { get { return current; } }
 
+        public void SearchChanged(string text)
+        {
+            if (text.Trim().Length > 0 && current != Clips) Go(Clips);
+            Clips.Refresh();
+        }
+
         protected override void WndProc(ref Message m)
         {
             if (Ui.HandleDpiChanged(this, ref m)) return;
             if (m.Msg == SingleInstance.ShowMessage && m.Msg != 0) { ShowWindowNow(); return; }
             if (m.Msg == SingleInstance.QuitMessage && m.Msg != 0) { Quit(); return; }
-            if (m.Msg == Native.WM_HOTKEY && m.WParam.ToInt32() == 1) { SaveClip(); return; }
+            if (m.Msg == Native.WM_HOTKEY && m.WParam.ToInt32() == 1) { ClipKeyPressed(); return; }
             base.WndProc(ref m);
         }
 
@@ -155,6 +162,8 @@ namespace Clutch
         {
             Keys k = keyData & Keys.KeyCode; bool ctrl = (keyData & Keys.Control) != 0, alt = (keyData & Keys.Alt) != 0;
             Control f = ActiveControl; while (f is ContainerControl && ((ContainerControl)f).ActiveControl != null) f = ((ContainerControl)f).ActiveControl;
+            if (ctrl && !alt && (k == Keys.K || k == Keys.F) && !CapturingHotkey && current != Welcome) { Bar.FocusSearch(); return true; }
+            if (k == Keys.OemQuestion && !ctrl && !alt && !CapturingHotkey && !(f is TextBox) && current != Welcome) { ShortcutsWindow.Show_(this); return true; }
             if (!CapturingHotkey && !alt && !(f is TextBox))
             {
                 bool handled = false;
@@ -204,6 +213,7 @@ namespace Clutch
                 if (Games.Running.Length > 0) gameMisses = 0;
                 else if (before.Length > 0 && ++gameMisses < 2) { Games.Running = before; Games.RunningExe = beforeExe; Games.RunningPid = beforePid; }
                 try { Games.UpdateCurrent(); } catch { }
+                try { Recorder.SetGame(Games.RunningPid); } catch (Exception ex) { Log.Info("Game audio", ex.Message); }
                 Rectangle? area = null; int pid = 0;
                 try { area = Games.WindowArea(out pid); } catch { }
                 if (!area.HasValue && areaPid != 0 && !Games.Alive(areaPid)) { area = Rectangle.Empty; pid = 0; }
@@ -260,7 +270,7 @@ namespace Clutch
                 tray.Icon = rec ? iconOn : iconOff;
                 string tip = "Clutch - " + Bar.StatusText();
                 tray.Text = tip.Length > 63 ? tip.Substring(0, 60) + "..." : tip;
-                if (trayToggle != null) trayToggle.Checked = Settings.Cur.Enabled;
+                if (trayToggle != null) { trayToggle.Right = Settings.Cur.Enabled ? "On" : "Off"; trayToggle.RightColor = Settings.Cur.Enabled ? C.Good : C.Faint; }
             }
             string g = rec ? Games.Current : "";
             if (g != discordGame) { discordGame = g; discordSince = DateTime.Now; }
@@ -287,6 +297,26 @@ namespace Clutch
         {
             Settings.Cur.Enabled = on; Settings.Save(); Sync();
             Bar.SyncToggle();
+        }
+
+        System.Windows.Forms.Timer holdTimer; long holdStart;
+
+        public void ClipKeyPressed()
+        {
+            if (!Settings.Cur.HoldClip || Settings.Cur.HoldSeconds < 0.05) { SaveClip(); return; }
+            if (holdTimer != null && holdTimer.Enabled) return;
+            holdStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (holdTimer == null)
+            {
+                holdTimer = new System.Windows.Forms.Timer(); holdTimer.Interval = 30;
+                holdTimer.Tick += delegate
+                {
+                    if ((Native.GetAsyncKeyState(Settings.Cur.HotkeyVk) & 0x8000) == 0) { holdTimer.Stop(); return; }
+                    double held = (System.Diagnostics.Stopwatch.GetTimestamp() - holdStart) / (double)System.Diagnostics.Stopwatch.Frequency;
+                    if (held >= Settings.Cur.HoldSeconds) { holdTimer.Stop(); SaveClip(); }
+                };
+            }
+            holdTimer.Start();
         }
 
         public void SaveClip()
@@ -374,12 +404,20 @@ namespace Clutch
         {
             string oldTitle = c.Title;
             string t = RenameDialog.Ask(this, oldTitle);
-            if (t == null || t.Trim().Length == 0 || t == oldTitle) return;
+            if (t != null) ApplyRename(c, t);
+        }
+
+        public bool ApplyRename(Clip c, string t)
+        {
+            string oldTitle = c.Title;
+            if (t == null || t.Trim().Length == 0 || t.Trim() == oldTitle) return true;
+            t = t.Trim();
             bool open = Viewer.Clip == c && current == Viewer;
+            double pos = open ? Viewer.Video.Position : 0;
             if (Viewer.Clip == c) Viewer.Video.Close();
             string err = Library.Rename(c, t);
-            if (open) Viewer.Open(c);
-            if (err != null) { Toast.Show(Glyph.Warning, err, null, null, 5000); return; }
+            if (open) { Viewer.Open(c); if (pos > 0.2) Viewer.Video.Position = pos; }
+            if (err != null) { Toast.Show(Glyph.Warning, err, null, null, 5000); return false; }
             Viewer.Invalidate(true);
             Toast.Show(Glyph.Rename, "Renamed to \"" + c.Title + "\"", "Undo", delegate
             {
@@ -389,6 +427,7 @@ namespace Clutch
                 if (o2) Viewer.Open(c);
                 Viewer.Invalidate(true);
             }, 8000);
+            return true;
         }
 
         public void OpenClipsFolder()
@@ -439,21 +478,32 @@ namespace Clutch
         }
         public void CancelDownload() { cancelDownload = true; }
 
+#if DEV
+        public ContextMenuStrip DevTrayMenu() { if (tray == null) MakeTray(); return tray.ContextMenuStrip; }
+#endif
         void MakeTray()
         {
             tray = new NotifyIcon(); tray.Icon = iconOff; tray.Text = "Clutch"; tray.Visible = true;
-            ContextMenuStrip m = Menus.Make(false);
+            ContextMenuStrip m = TrayMenu.Make();
+            TrayMenu.Add(m, "Open Clutch", "\uE80F", ShowWindowNow);
+            traySave = TrayMenu.Add(m, "Save clip", "\uE714", SaveClip);
+            TrayMenu.Add(m, "Clips folder", Glyph.Folder, OpenClipsFolder);
+            TrayMenu.Add(m, "Settings", "\uE713", delegate { ShowWindowNow(); Go(SettingsP); });
+            TrayMenu.Line(m);
+            trayToggle = TrayMenu.Add(m, "Replay buffer", "", delegate { SetEnabled(!Settings.Cur.Enabled); });
+            trayGame = TrayMenu.Add(m, "Game", "", ShowWindowNow);
+            trayUpdate = TrayMenu.Add(m, "Update available", "", StartUpdate); trayUpdate.Visible = false; trayUpdate.Badge = true; trayUpdate.RightColor = C.Accent;
+            TrayMenu.Line(m);
+            TrayMenu.Add(m, "Quit Clutch", "", Quit);
             m.Opening += delegate
             {
-                traySave.Text = "Save clip (" + HotkeyName() + ")";
-                trayToggle.Checked = Settings.Cur.Enabled;
+                traySave.Right = HotkeyName();
+                bool on = Settings.Cur.Enabled, rec = Recorder.Now == Recorder.State.Recording;
+                trayToggle.Right = !on ? "Off" : rec ? "On" : "Starting"; trayToggle.RightColor = !on ? C.Faint : rec ? C.Good : C.Warn;
+                trayGame.Right = Games.Running.Length > 0 ? Games.Running : "None open"; trayGame.RightColor = Games.Running.Length > 0 ? C.Text : C.Faint;
+                Updater.Release r = Updater.Available;
+                trayUpdate.Visible = r != null; if (r != null) trayUpdate.Right = r.Version;
             };
-            ToolStripMenuItem open = new ToolStripMenuItem("Open Clutch"); open.Click += delegate { ShowWindowNow(); }; m.Items.Add(open);
-            traySave = new ToolStripMenuItem("Save clip"); traySave.Click += delegate { SaveClip(); }; m.Items.Add(traySave);
-            trayToggle = new ToolStripMenuItem("Replay buffer on"); trayToggle.Click += delegate { SetEnabled(!Settings.Cur.Enabled); }; m.Items.Add(trayToggle);
-            m.Items.Add(new ToolStripSeparator());
-            trayUpdate = new ToolStripMenuItem("Update"); trayUpdate.Visible = false; trayUpdate.Click += delegate { StartUpdate(); }; m.Items.Add(trayUpdate);
-            ToolStripMenuItem quit = new ToolStripMenuItem("Quit Clutch"); quit.Click += delegate { Quit(); }; m.Items.Add(quit);
             tray.ContextMenuStrip = m;
             tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowWindowNow(); };
         }
@@ -550,7 +600,7 @@ namespace Clutch
                 if (r != null && !manual && r.Version != before && Settings.Cur.Overlay && (!Visible || WindowState == FormWindowState.Minimized || Form.ActiveForm != this))
                     SavedOverlay.Pop("Update available", "Clutch " + r.Version + " is ready. Open Clutch to update.", true, NoticeScreen());
                 else if (manual && Updater.LastError.Length == 0) Toast.Show(Glyph.Check, "You're on the latest version", null, null, 3000);
-                if (trayUpdate != null) { trayUpdate.Visible = r != null; if (r != null) trayUpdate.Text = "Update to " + r.Version; }
+                if (trayUpdate != null) { trayUpdate.Visible = r != null; if (r != null) trayUpdate.Right = r.Version; }
             });
         }
 

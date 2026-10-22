@@ -70,7 +70,7 @@ namespace Clutch
                         if (!fallbackOn && HeldMods() == Settings.Cur.HotkeyMods)
                         {
                             down = true;
-                            try { main.BeginInvoke((MethodInvoker)main.SaveClip); } catch { }
+                            try { main.BeginInvoke((MethodInvoker)main.ClipKeyPressed); } catch { }
                         }
                     }
                     else if (!isDown) down = false;

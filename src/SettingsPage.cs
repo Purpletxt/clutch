@@ -9,18 +9,17 @@ namespace Clutch
     class Row : Ctl
     {
         public string Title, Desc, Icon = ""; public Control Ctl1, Ctl2; public int RightW, Right2W; public bool Line = true;
-        public int MinH, CtlH;
         public bool Hidden;
         public Func<Image> Picture;
         public Row(string title, string desc, Control right, int rightW) { Title = title; Desc = desc ?? ""; Ctl1 = right; RightW = rightW; if (right != null) Controls.Add(right); }
         public void Add2(Control c, int w) { Ctl2 = c; Right2W = w; Controls.Add(c); }
         int TextW { get { return Width - S(RightW + Right2W + 60) - S(36); } }
-        public int Fit() { int h = S(22) + (Desc.Length > 0 ? Ui.WrapHeight(Desc, Ui.F(9, 0), Math.Max(S(100), TextW)) + S(4) : 0); return Math.Max(S(MinH > 0 ? MinH : 64), h + S(28)); }
+        public int Fit() { int h = S(22) + (Desc.Length > 0 ? Ui.WrapHeight(Desc, Ui.F(9, 0), Math.Max(S(100), TextW)) + S(4) : 0); return Math.Max(S(64), h + S(28)); }
         protected override void OnLayout(LayoutEventArgs e)
         {
             base.OnLayout(e);
             int x = Width - S(20);
-            if (Ctl1 != null) { int h = CtlH > 0 ? S(CtlH) : Ctl1 is Toggle ? S(30) : S(34); Ctl1.SetBounds(x - S(RightW), (Height - h) / 2, S(RightW), h); x -= S(RightW) + S(10); }
+            if (Ctl1 != null) { int h = Ctl1 is Toggle ? S(30) : S(34); Ctl1.SetBounds(x - S(RightW), (Height - h) / 2, S(RightW), h); x -= S(RightW) + S(10); }
             if (Ctl2 != null) { int h = S(34); Ctl2.SetBounds(x - S(Right2W), (Height - h) / 2, S(Right2W), h); }
         }
         protected override void OnPaint(PaintEventArgs e)
@@ -58,22 +57,24 @@ namespace Clutch
 
     class SettingsPage : Page
     {
-        readonly Scroller scroll = new Scroller();
-        readonly Seg tabs = new Seg(new[] { "Recording", "Audio", "Games", "Storage", "General" });
+        readonly BackdropScroller scroll = new BackdropScroller();
+        readonly PillTabs tabs = new PillTabs(new[] { "Recording", "Audio", "Games", "Storage", "General" }, new[] { Glyph.Video, Glyph.Volume, Glyph.Game, Glyph.Folder, Glyph.Settings });
+        readonly Lbl pageHead = new Lbl("Settings", 24, 4, C.Text), pageSub = new Lbl("Changes save straight away.", 10.5f, 1, C.Faint);
         static readonly int[] TabFirstCard = { 0, 2, 3, 4, 5 }, TabLastCard = { 1, 2, 3, 4, 6 };
-        readonly Panel content = new Panel();
+        readonly BackdropPanel content = new BackdropPanel();
         readonly List<Card> cards = new List<Card>();
         readonly Dictionary<Card, List<Row>> rows = new Dictionary<Card, List<Row>>();
         readonly Dictionary<Card, Lbl> heads = new Dictionary<Card, Lbl>();
         bool loading;
 
-        Toggle tEnabled, tDesktop, tMic, tGamesOnly, tStartup, tTray, tOverlay, tSound, tDiscord, tUpdate, tAdvanced, tDetect, tClean;
+        Toggle tSwitcher, tHold, tSplit, tEnabled, tDesktop, tMic, tGamesOnly, tStartup, tTray, tOverlay, tSound, tDiscord, tUpdate, tAdvanced, tDetect, tClean;
         Seg sCleanDays, sCleanSize; Row rScreen, rCleanDays, rCleanSize, rFps;
         static readonly int[] CleanDays = { 7, 14, 30, 90, 0 }, CleanSizes = { 10, 25, 50, 100, 0 };
         Btn bPosition; Row rPosition;
+        Seg sShare; Seg sLayout; Field fFolder; Btn bUseFolder;
         Seg sLength, sFps, sQuality, sRes, sCapture; Drop dMonitor, dEncoder, dDesktop, dMic; Btn bHotkey, bFfmpeg, bFolder, bOpenFolder, bLog, bAddApp, bBrowse, bUpdate, bReport;
-        Slider micVol; Meter mDesktop, mMic;
-        Row rMemory, rRes, rEncoder, rFfmpeg, rFolder, rDesktopDev, rMicDev, rMicVol, rHotkey, rUpdate;
+        Slider micVol, sHold; Meter mDesktop, mMic;
+        Row rHold, rSplit, rMemory, rRes, rEncoder, rFfmpeg, rFolder, rDesktopDev, rMicDev, rMicVol, rHotkey, rUpdate;
         Card gamesCard;
         List<AudioDevice> desktopDevs = new List<AudioDevice>(), micDevs = new List<AudioDevice>();
         static readonly int[] Lengths = { 30, 60, 120, 180 };
@@ -81,8 +82,9 @@ namespace Clutch
 
         public SettingsPage(MainForm m) : base(m)
         {
-            content.BackColor = C.Bg;
-            scroll.Controls.Add(content); Controls.Add(scroll); Controls.Add(tabs);
+            content.Page = this; scroll.Page = this;
+            pageHead.BackColor = pageSub.BackColor = Color.Transparent;
+            scroll.Controls.Add(content); Controls.Add(scroll); Controls.Add(tabs); Controls.Add(pageHead); Controls.Add(pageSub);
             tabs.Changed += delegate { scroll.AutoScrollPosition = Point.Empty; Relayout(); };
             Settings s = Settings.Cur;
 
@@ -95,6 +97,11 @@ namespace Clutch
             bHotkey = new Btn("", Glyph.Keyboard, BtnStyle.Standard);
             bHotkey.Click += delegate { StartHotkeyCapture(); };
             rHotkey = AddRow(c, "Clip key", "Works in any game, and the game still receives the key too. Click to change.", bHotkey, 170); rHotkey.Icon = Glyph.Keyboard;
+            tHold = new Toggle(); tHold.Changed += delegate { if (loading) return; s.HoldClip = tHold.On; Settings.Save(); HoldRows(); Relayout(); };
+            AddRow(c, "Hold to clip", "Only saves when you hold the clip key for a moment, so a quick accidental tap doesn't make a clip.", tHold, 60).Icon = Glyph.Clock;
+            sHold = new Slider(); sHold.Min = 2; sHold.Max = 30; sHold.Format = delegate (int v) { return (v / 10.0).ToString("0.0") + " s"; };
+            sHold.Changed += delegate { if (loading) return; s.HoldSeconds = sHold.Value / 10.0; Settings.Save(); };
+            rHold = AddRow(c, "Hold for", "How long to hold the clip key before a clip is saved.", sHold, 300);
             rMemory = AddRow(c, "Memory use", "", null, 0); rMemory.Icon = Glyph.Info;
 
             c = NewCard("Video");
@@ -125,6 +132,8 @@ namespace Clutch
             dDesktop = new Drop(); dDesktop.Changed += delegate { if (loading) return; s.DesktopDevice = dDesktop.Index <= 0 ? "" : desktopDevs[dDesktop.Index - 1].Id; AudioChanged(); };
             mDesktop = new Meter(); mDesktop.Level = delegate { return Recorder.Desktop.Level; };
             rDesktopDev = AddRow(c, "Output device", "", dDesktop, 300); rDesktopDev.Add2(mDesktop, 90);
+            tSplit = new Toggle(); tSplit.Changed += delegate { if (loading) return; s.SplitGameAudio = tSplit.On; AudioChanged(); };
+            rSplit = AddRow(c, "Record game audio separately", ProcessLoopback.Supported ? "Saves the game, your other apps (Discord, music) and your mic on separate tracks, so you can mix them when trimming." : "Needs Windows 11, or Windows 10 build 20348 or newer.", tSplit, 60); rSplit.Icon = Glyph.Game;
             tMic = new Toggle(); tMic.Changed += delegate { if (loading) return; s.Mic = tMic.On; AudioChanged(); };
             r = AddRow(c, "Microphone", "Saved on its own track too, so you can lower or mute it when trimming.", tMic, 60); r.Icon = Glyph.Mic;
             dMic = new Drop(); dMic.Changed += delegate { if (loading) return; s.MicDevice = dMic.Index <= 0 ? "" : micDevs[dMic.Index - 1].Id; AudioChanged(); };
@@ -141,10 +150,19 @@ namespace Clutch
             AddRow(gamesCard, "Detect games automatically", "Recognises thousands of games using Discord's public game list, so you don't have to add them. Games you add below always count.", tDetect, 60).Icon = Glyph.Search;
 
             c = NewCard("Clips and storage");
-            bFolder = new Btn("Change", "", BtnStyle.Standard); bFolder.Click += delegate { PickFolder(); };
+            bFolder = new Btn("Browse\u2026", "", BtnStyle.Standard); bFolder.Click += delegate { PickFolder(); };
             bOpenFolder = new Btn("", Glyph.Folder, BtnStyle.Standard);
             bOpenFolder.Click += delegate { try { Directory.CreateDirectory(s.Folder); System.Diagnostics.Process.Start("explorer.exe", "\"" + s.Folder + "\""); } catch { } };
             rFolder = AddRow(c, "Clips folder", "", bFolder, 100); rFolder.Add2(bOpenFolder, 36);
+            rFolder.Icon = Glyph.Folder;
+            fFolder = new Field(); fFolder.Placeholder = "Paste a folder path, like D:\\Clips"; fFolder.Box.Text = s.Folder;
+            fFolder.Box.KeyDown += delegate (object o, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; UseTyped(); }
+                if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; fFolder.Box.Text = Settings.Cur.Folder; }
+            };
+            bUseFolder = new Btn("Use", "", BtnStyle.Standard); bUseFolder.Click += delegate { UseTyped(); };
+            Row rPath = AddRow(c, "Or paste a location", "Paste any folder path and press Enter.", bUseFolder, 70); rPath.Add2(fFolder, 340);
             bFfmpeg = new Btn("", Glyph.Download, BtnStyle.Standard);
             bFfmpeg.Click += delegate { if (Main.Downloading) Main.CancelDownload(); else Main.StartDownload(); };
             rFfmpeg = AddRow(c, "FFmpeg", "", bFfmpeg, 170);
@@ -175,7 +193,17 @@ namespace Clutch
             tSound = new Toggle(); tSound.Changed += delegate { if (loading) return; s.SaveSound = tSound.On; Settings.Save(); };
             AddRow(c, "Play a sound when a clip is saved", "", tSound, 60);
             tDiscord = new Toggle(); tDiscord.Changed += delegate { if (loading) return; s.DiscordStatus = tDiscord.On; Settings.Save(); Main.Sync(); };
-            AddRow(c, "Show what you're clipping on Discord", "Your Discord status shows \"Clipping Roblox with Clutch\" with the game's icon while Clutch records one of your games.", tDiscord, 60);
+            AddRow(c, "Show what you're clipping on Discord", "Your Discord status shows \"Clipping Roblox with Clutch\" with the game's icon while Clutch records one of your games.", tDiscord, 60).Icon = Glyph.Discord;
+            sShare = new Seg(new[] { "10 MB", "50 MB", "500 MB" });
+            sShare.Changed += delegate { if (loading) return; s.DiscordMB = DiscordFit.Sizes[sShare.Index]; Settings.Save(); };
+            AddRow(c, "Discord upload size", "Share on Discord shrinks clips to fit this. 10 MB works for everyone; 50 MB and 500 MB need Nitro.", sShare, 300).Icon = Glyph.Discord;
+            tSwitcher = new Toggle(); tSwitcher.Changed += delegate { if (loading) return; s.DiscordSwitcher = tSwitcher.On; Settings.Save(); };
+            AddRow(c, "Open Discord when sharing", "Brings Discord to the front and opens its search, so you just pick who to send it to and press Ctrl+V.", tSwitcher, 60).Icon = Glyph.Search;
+            Btn bKeys = new Btn("Show", Glyph.Keyboard, BtnStyle.Standard); bKeys.Click += delegate { ShortcutsWindow.Show_(Main); };
+            AddRow(c, "Keyboard shortcuts", "Every shortcut in Clutch. You can also press ? anywhere.", bKeys, 110).Icon = Glyph.Keyboard;
+            sLayout = new Seg(new[] { "Game chips", "Compact" });
+            sLayout.Changed += delegate { if (loading) return; s.GameChips = sLayout.Index == 0; Settings.Save(); Main.Clips.LayoutChanged(); };
+            AddRow(c, "Library layout", "Game chips puts a button for each game above your clips, so you can filter with one click. Compact keeps games in a small menu.", sLayout, 220).Icon = Glyph.Film;
 
             c = NewCard("About");
             bUpdate = new Btn("Check now", "", BtnStyle.Standard);
@@ -184,7 +212,7 @@ namespace Clutch
             if (Updater.Configured)
             {
                 tUpdate = new Toggle(); tUpdate.Changed += delegate { if (loading) return; s.AutoUpdate = tUpdate.On; Settings.Save(); };
-                AddRow(c, "Check for updates automatically", "Clutch asks GitHub about twice a day and tells you before installing anything.", tUpdate, 60);
+                AddRow(c, "Check for updates automatically", "Clutch quietly checks every few minutes, using almost no data, and asks before installing anything.", tUpdate, 60);
             }
             bReport = new Btn("Create report", "", BtnStyle.Standard);
             bReport.Click += delegate { using (ReportWindow w = new ReportWindow(Report.Build(null), false)) { w.StartPosition = FormStartPosition.CenterParent; w.ShowInTaskbar = false; w.ShowDialog(Main); } };
@@ -210,7 +238,7 @@ namespace Clutch
         Card NewCard(string title)
         {
             Card c = new Card(); cards.Add(c); rows[c] = new List<Row>(); content.Controls.Add(c);
-            Lbl h = new Lbl(title, 13, 4, C.Text); heads[c] = h; content.Controls.Add(h);
+            Lbl h = new Lbl(title, 13, 4, C.Text); h.BackColor = Color.Transparent; heads[c] = h; content.Controls.Add(h);
             return c;
         }
 
@@ -248,13 +276,13 @@ namespace Clutch
             sLength.Set(Math.Max(0, Array.IndexOf(Lengths, s.BufferSeconds)));
             sFps.Set(s.Fps == 30 ? 0 : 1); sQuality.Set(s.Quality); sRes.Set(s.Resolution); sCapture.Set(s.CaptureMode);
             dEncoder.Index = Math.Max(0, Array.IndexOf(Encoders, s.Encoder));
-            tDesktop.Set(s.DesktopAudio); tMic.Set(s.Mic); micVol.Value = s.MicVolume;
+            tDesktop.Set(s.DesktopAudio); tHold.Set(s.HoldClip); sHold.Value = Math.Max(2, Math.Min(30, (int)Math.Round(s.HoldSeconds * 10))); HoldRows(); tSplit.Set(s.SplitGameAudio && ProcessLoopback.Supported); tSplit.Enabled = ProcessLoopback.Supported && s.DesktopAudio; tMic.Set(s.Mic); micVol.Value = s.MicVolume;
             tGamesOnly.Set(s.GamesOnly);
             tAdvanced.Set(s.ShowAdvanced); tDetect.Set(s.AutoDetectGames); tClean.Set(s.AutoClean);
             sCleanDays.Set(Array.IndexOf(CleanDays, s.CleanDays) < 0 ? 2 : Array.IndexOf(CleanDays, s.CleanDays));
             sCleanSize.Set(Array.IndexOf(CleanSizes, s.CleanGB) < 0 ? 2 : Array.IndexOf(CleanSizes, s.CleanGB));
             ShowAdvanced(); CleanRows();
-            tStartup.Set(Settings.StartWithWindows); tTray.Set(s.CloseToTray); tOverlay.Set(s.Overlay); bPosition.Enabled = s.Overlay; tSound.Set(s.SaveSound); tDiscord.Set(s.DiscordStatus); if (tUpdate != null) tUpdate.Set(s.AutoUpdate);
+            tStartup.Set(Settings.StartWithWindows); tTray.Set(s.CloseToTray); tOverlay.Set(s.Overlay); bPosition.Enabled = s.Overlay; tSound.Set(s.SaveSound); tDiscord.Set(s.DiscordStatus); sShare.Set(Math.Max(0, Array.IndexOf(DiscordFit.Sizes, s.DiscordMB))); tSwitcher.Set(s.DiscordSwitcher); sLayout.Set(s.GameChips ? 0 : 1); if (tUpdate != null) tUpdate.Set(s.AutoUpdate);
             dMonitor.Items.Clear();
             Screen[] all = Screen.AllScreens; int n = 1;
             foreach (Screen sc in all) if (sc.Primary) dMonitor.Items.Add("Screen " + n++ + " (main)  \u00B7  " + sc.Bounds.Width + " \u00D7 " + sc.Bounds.Height);
@@ -264,6 +292,7 @@ namespace Clutch
         }
 
         void ShowAdvanced() { bool a = Settings.Cur.ShowAdvanced; rRes.Hidden = rScreen.Hidden = rEncoder.Hidden = !a; }
+        void HoldRows() { rHold.Hidden = !Settings.Cur.HoldClip; }
         void CleanRows() { rCleanDays.Hidden = rCleanSize.Hidden = !Settings.Cur.AutoClean; }
 
         void LoadDevices()
@@ -317,6 +346,7 @@ namespace Clutch
             if ((DateTime.Now - freeAt).TotalSeconds > 10)
             try { freeAt = DateTime.Now; free = "  \u00B7  " + (new DriveInfo(Path.GetPathRoot(s.Folder)).AvailableFreeSpace >> 30) + " GB free"; } catch { }
             SetDesc(rFolder, s.Folder + free);
+            if (!fFolder.Box.Focused && fFolder.Box.Text != s.Folder) fFolder.Box.Text = s.Folder;
             string ff = Main.Downloading ? "Downloading\u2026 " + Main.DownloadPercent + "%" : FFmpeg.Ready ? "Installed" + (FFmpeg.Version.Length > 0 ? " (" + FFmpeg.Version + ")" : "") + " from " + FFmpeg.Source + "." : Main.DownloadError.Length > 0 ? Main.DownloadError : "Not installed yet. Needed for recording.";
             SetDesc(rFfmpeg, ff);
             double oy = s.OverlayY;
@@ -345,13 +375,17 @@ namespace Clutch
             r.Invalidate(); if (r.Fit() != before) Relayout();
         }
 
+        protected override void OnPaintBackground(PaintEventArgs e) { Backdrop.Draw(e.Graphics, ClientSize, Point.Empty); }
+
         public override void Relayout()
         {
             int sb = SystemInformation.VerticalScrollBarWidth;
             int w = Math.Min(S(860), ClientSize.Width - S(56) - sb);
             int x = Math.Max(S(28), (ClientSize.Width - sb - w) / 2), y = S(8);
-            tabs.SetBounds(x, S(18), Math.Min(w, S(560)), S(36));
-            scroll.SetBounds(0, S(66), ClientSize.Width, ClientSize.Height - S(66));
+            int hw = Ui.Measure(pageHead.Text, Ui.F(24, 4)).Width + S(4);
+            pageHead.SetBounds(x - S(2), S(10), hw, S(48)); pageSub.SetBounds(pageHead.Right + S(12), S(18), Math.Max(0, w - hw - S(12)), S(40));
+            tabs.SetBounds(x, S(70), w, S(40));
+            scroll.SetBounds(0, S(124), ClientSize.Width, ClientSize.Height - S(124));
             for (int ci = 0; ci < cards.Count; ci++)
             {
                 Card c = cards[ci];
@@ -444,13 +478,16 @@ namespace Clutch
 
         void PickFolder()
         {
-            using (FolderBrowserDialog d = new FolderBrowserDialog())
-            {
-                d.Description = "Where should Clutch save your clips?"; d.SelectedPath = Settings.Cur.Folder;
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                Settings.Cur.ClipsFolder = d.SelectedPath; Settings.Save();
-                Library.Rescan(); Tick();
-            }
+            string p = FolderPicker.Pick(FindForm(), "Where should Clutch save your clips?", Settings.Cur.Folder);
+            if (p == null) return;
+            ClipFolder.Change(Main, p);
+            fFolder.Box.Text = Settings.Cur.Folder; Tick();
+        }
+
+        void UseTyped()
+        {
+            if (ClipFolder.Change(Main, fFolder.Box.Text)) { fFolder.Box.Text = Settings.Cur.Folder; Main.Focus(); }
+            Tick();
         }
     }
 }

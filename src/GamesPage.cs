@@ -9,7 +9,7 @@ namespace Clutch
 {
     class GamesPage : Page
     {
-        readonly Lbl title = new Lbl("Games", 18, 4, C.Text), count = new Lbl("", 9.5f, 1, C.Faint);
+        readonly Lbl title = new Lbl("Games", 24, 4, C.Text), count = new Lbl("", 10.5f, 1, C.Faint);
         readonly Btn manage = new Btn("Auto-start settings", Glyph.Settings, BtnStyle.Standard);
         readonly GameGrid grid;
 
@@ -22,11 +22,11 @@ namespace Clutch
 
         public override void Relayout()
         {
-            int pad = S(24), w = ClientSize.Width, y = S(18), h = S(34);
-            title.SetBounds(pad, y - S(2), Ui.Measure("Games", Ui.F(18, 4)).Width + S(4), h + S(4));
-            manage.Height = h; manage.Width = manage.PreferredWidth(); manage.Location = new Point(w - pad - manage.Width, y);
-            count.SetBounds(title.Right + S(10), y + S(2), Math.Max(0, manage.Left - title.Right - S(20)), h);
-            y += h + S(18);
+            int pad = S(24), w = ClientSize.Width, y = S(10), h = S(36);
+            title.SetBounds(pad - S(2), y, Ui.Measure("Games", Ui.F(24, 4)).Width + S(4), S(48));
+            manage.Height = h; manage.Width = manage.PreferredWidth() + S(6); manage.Location = new Point(w - pad - manage.Width, y + S(6));
+            count.SetBounds(title.Right + S(12), y + S(8), Math.Max(0, manage.Left - title.Right - S(20)), S(40));
+            y += S(48) + S(18);
             grid.SetBounds(pad - S(4), y, w - pad * 2 + S(8), ClientSize.Height - y);
         }
 
@@ -38,6 +38,7 @@ namespace Clutch
             count.Invalidate(); grid.Invalidate();
         }
 
+        protected override void OnPaintBackground(PaintEventArgs e) { Backdrop.Draw(e.Graphics, ClientSize, Point.Empty); }
         public override void Entered() { Refresh(); Relayout(); }
         public override void Leaving() { grid.FreeBanners(); }
     }
@@ -128,7 +129,7 @@ namespace Clutch
             gap = S(18);
             int avail = Width - S(14);
             cols = Math.Max(1, (avail + gap) / (S(300) + gap));
-            tileW = (avail - gap * (cols - 1)) / cols; bannerH = tileW * 5 / 12; tileH = bannerH + S(108);
+            tileW = (avail - gap * (cols - 1)) / cols; tileH = bannerH = tileW * 9 / 16;
         }
         int ContentH { get { Measure(); return (games.Count + cols - 1) / cols * (tileH + gap) + S(20); } }
         void Clamp() { scroll = Math.Max(0, Math.Min(scroll, ContentH - Height)); }
@@ -153,16 +154,9 @@ namespace Clutch
             return t < 60 ? t + " s" : t < 3600 ? (t / 60) + " min" : (t / 3600) + " h " + (t % 3600 / 60) + " min";
         }
 
-        static GraphicsPath TopRound(RectangleF r, float rad)
-        {
-            GraphicsPath p = new GraphicsPath(); float d = rad * 2;
-            p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-            p.AddLine(r.Right, r.Bottom, r.X, r.Bottom); p.CloseFigure(); return p;
-        }
-
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = Begin(e); Measure();
+            Graphics g = Begin(e); if (Parent != null) Backdrop.Draw(g, Parent.ClientSize, new Point(-Left, -Top)); Measure();
             if (games.Count == 0) { Empty(g); return; }
             for (int i = 0; i < games.Count; i++)
             {
@@ -175,51 +169,62 @@ namespace Clutch
         void DrawTile(Graphics g, Game gm, Rectangle r, bool h)
         {
             float rad = S(14);
-            Ui.FillRound(g, new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), rad, h ? C.CardHi : C.Card);
-            Rectangle br = new Rectangle(r.X, r.Y, r.Width, bannerH);
-            Bitmap b = Banner(gm, br.Size);
-            using (GraphicsPath p = TopRound(br, rad))
+            Bitmap b = Banner(gm, r.Size);
+            using (GraphicsPath p = Ui.Round(r, rad))
             {
-                if (b != null) using (TextureBrush tb = new TextureBrush(b, WrapMode.Clamp)) { tb.TranslateTransform(br.X, br.Y); g.FillPath(tb, p); }
+                if (b != null) using (TextureBrush tb = new TextureBrush(b, WrapMode.Clamp)) { tb.TranslateTransform(r.X, r.Y); g.FillPath(tb, p); }
                 else
                 {
                     int hash = 0; foreach (char ch in gm.Name) hash = unchecked(hash * 31 + ch);
                     Color hue = Ui.FromHue((hash & 0x7fffffff) % 360);
-                    using (LinearGradientBrush lg = new LinearGradientBrush(br, Ui.Mix(hue, C.Card, 0.35f), Ui.Mix(hue, C.Card, 0.8f), 35f)) g.FillPath(lg, p);
+                    using (LinearGradientBrush lg = new LinearGradientBrush(r, Ui.Mix(hue, C.Card, 0.35f), Ui.Mix(hue, C.Card, 0.85f), 35f)) g.FillPath(lg, p);
                     Bitmap icon = GameIcons.Get(gm.Name);
                     if (icon != null)
                     {
-                        int s = (int)(bannerH * 1.1);
+                        int s = (int)(r.Height * 1.05);
                         using (System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes())
                         {
-                            ia.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.18f });
-                            g.SetClip(p); g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                            g.DrawImage(icon, new Rectangle(br.Right - s + S(10), br.Y - S(16), s, s), 0, 0, icon.Width, icon.Height, GraphicsUnit.Pixel, ia);
-                            g.ResetClip();
+                            ia.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.16f });
+                            Region before = g.Clip; g.SetClip(p, CombineMode.Intersect); g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            g.DrawImage(icon, new Rectangle(r.Right - s + S(20), r.Y - S(20), s, s), 0, 0, icon.Width, icon.Height, GraphicsUnit.Pixel, ia);
+                            g.Clip = before;
                         }
                     }
                 }
-                if (h) using (SolidBrush lift = new SolidBrush(Color.FromArgb(28, 255, 255, 255))) g.FillPath(lift, p);
+                Region keep = g.Clip; g.SetClip(p, CombineMode.Intersect);
+                int botH = Math.Min(S(110), r.Height * 3 / 5);
+                using (LinearGradientBrush lg = new LinearGradientBrush(new Rectangle(r.X, r.Bottom - botH - 1, r.Width, botH + 2), Color.FromArgb(0, 8, 7, 14), Color.FromArgb(225, 8, 7, 14), 90f))
+                    g.FillRectangle(lg, r.X, r.Bottom - botH, r.Width, botH);
+                if (h) using (SolidBrush dark = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillRectangle(dark, r);
+                g.Clip = keep;
             }
-            Rectangle ic = new Rectangle(r.X + S(18), br.Bottom + (r.Bottom - br.Bottom - S(64)) / 2, S(64), S(64));
-            Bitmap gi = GameIcons.Get(gm.Name);
-            if (gi != null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(gi, Rectangle.Inflate(ic, -S(4), -S(4))); }
-            else ClipGrid.GameBadge(g, gm.Name, ic);
-            int tx = ic.Right + S(16), tw = r.Right - tx - S(14);
-            string badge = gm.AutoStart ? "Auto-start" : "";
-            int bw = badge.Length > 0 ? Ui.Measure(badge, Ui.F(8, 5)).Width + S(20) : 0;
-            int ty = ic.Y - S(2);
-            Ui.TextLeft(g, gm.Name, Ui.F(13, 4), new Rectangle(tx, ty, tw - bw - S(8), S(28)), C.Text);
-            if (bw > 0)
+            Ui.StrokeRound(g, new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), rad, Color.FromArgb(h ? 60 : 26, 255, 255, 255), 1);
+
+            if (gm.AutoStart)
             {
-                Rectangle pill = new Rectangle(r.Right - S(14) - bw, ty + S(3), bw, S(24));
-                Ui.FillAccent(g, pill, S(12), 0, 70);
-                Ui.TextCenter(g, badge, Ui.F(8, 5), pill, C.AccentHi);
+                string badge = "Auto-start"; int bw = Ui.Measure(badge, Ui.F(8.5f, 5)).Width + S(22);
+                Rectangle pill = new Rectangle(r.X + S(12), r.Y + S(12), bw, S(26));
+                Ui.FillRound(g, pill, S(13), Color.FromArgb(200, 14, 12, 22));
+                Ui.TextCenter(g, badge, Ui.F(8.5f, 5), pill, C.AccentHi);
             }
-            string sub = gm.Clips == 0 ? "No clips yet" : (gm.Clips == 1 ? "1 clip" : gm.Clips + " clips") + "  \u00B7  " + Footage(gm.Seconds);
-            Ui.TextLeft(g, sub, Ui.F(10, 1), new Rectangle(tx, ty + S(30), tw, S(20)), Ui.Mix(C.Sub, C.Text, 0.35f));
-            string last = gm.Clips == 0 ? (gm.AutoStart ? "Recording starts when it opens" : "") : "Last clip " + Library.NiceDate(gm.Last);
-            Ui.TextLeft(g, last, Ui.F(9, 0), new Rectangle(tx, ty + S(50), tw, S(18)), C.Faint);
+            if (h)
+            {
+                string v = "View clips"; int vw = Ui.Measure(v, Ui.F(9, 5)).Width + S(40);
+                Rectangle vp = new Rectangle(r.Right - S(12) - vw, r.Y + S(12), vw, S(30));
+                Ui.FillRound(g, vp, S(15), C.Accent);
+                Ui.TextLeft(g, v, Ui.F(9, 5), new Rectangle(vp.X + S(14), vp.Y, vw, vp.Height), Color.White);
+                Ui.DrawIcon(g, "", 8, new Rectangle(vp.Right - S(24), vp.Y, S(16), vp.Height), Color.White);
+            }
+
+            Rectangle ic = new Rectangle(r.X + S(16), r.Bottom - S(16) - S(44), S(44), S(44));
+            Bitmap gi = GameIcons.Get(gm.Name);
+            if (gi != null) { Ui.FillRound(g, ic, S(10), Color.FromArgb(160, 14, 12, 22)); g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(gi, Rectangle.Inflate(ic, -S(6), -S(6))); }
+            else ClipGrid.GameBadge(g, gm.Name, ic);
+            int tx = ic.Right + S(14), tw = r.Right - tx - S(16);
+            Ui.TextLeft(g, gm.Name, Ui.F(13, 4), new Rectangle(tx, ic.Y - S(2), tw, S(26)), Color.White);
+            string sub = gm.Clips == 0 ? (gm.AutoStart ? "Recording starts when it opens" : "No clips yet")
+                : (gm.Clips == 1 ? "1 clip" : gm.Clips + " clips") + "  ·  " + Footage(gm.Seconds) + "  ·  " + Library.NiceDate(gm.Last);
+            Ui.TextLeft(g, sub, Ui.F(9, 0), new Rectangle(tx, ic.Y + S(24), tw, S(20)), Color.FromArgb(200, 255, 255, 255));
         }
 
         void Empty(Graphics g)

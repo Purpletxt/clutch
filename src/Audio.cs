@@ -129,9 +129,26 @@ namespace Clutch
 
         public bool Running { get { return running; } }
 
+        int targetPid; bool exclude;
+        public int Pid { get { return targetPid; } }
+
+        public void StartProcess(int pid, bool excludeTree, int bufferSeconds)
+        {
+            Stop();
+            targetPid = pid; exclude = excludeTree; deviceId = ""; seconds = bufferSeconds + 10;
+            running = true; Error = "";
+            thread = new Thread(Loop); thread.IsBackground = true; thread.Name = "Audio " + Label;
+            thread.SetApartmentState(ApartmentState.MTA);
+            thread.Priority = ThreadPriority.AboveNormal;
+            thread.Start();
+        }
+
+        public bool Covers(double t) { lock (gate) return ring != null && t0 >= 0 && t0 <= t + 0.25; }
+
         public void Start(string id, int bufferSeconds)
         {
             Stop();
+            targetPid = 0;
             deviceId = id ?? ""; seconds = bufferSeconds + 10;
             running = true; Error = "";
             thread = new Thread(Loop); thread.IsBackground = true; thread.Name = "Audio " + Label;
@@ -154,7 +171,7 @@ namespace Clutch
         {
             while (running)
             {
-                try { CaptureSession(); }
+                try { if (targetPid != 0) ProcessSession(); else CaptureSession(); }
                 catch (Exception ex)
                 {
                     Error = ex.Message; Level = 0;
@@ -247,6 +264,60 @@ namespace Clutch
             }
         }
 
+        void ProcessSession()
+        {
+            IAudioClient ac = ProcessLoopback.Activate(targetPid, exclude);
+            IAudioCaptureClient cap = null; IntPtr fmt = IntPtr.Zero;
+            AutoResetEvent ready = new AutoResetEvent(false);
+            try
+            {
+                int rate = 48000;
+                fmt = Marshal.AllocCoTaskMem(18);
+                Marshal.WriteInt16(fmt, 0, 1); Marshal.WriteInt16(fmt, 2, 2); Marshal.WriteInt32(fmt, 4, rate); Marshal.WriteInt32(fmt, 8, rate * 4);
+                Marshal.WriteInt16(fmt, 12, 4); Marshal.WriteInt16(fmt, 14, 16); Marshal.WriteInt16(fmt, 16, 0);
+                ac.Initialize(0, 0x00020000 | 0x00040000 | 0x08000000 | unchecked((int)0x80000000), 2000000, 0, fmt, IntPtr.Zero);
+                ac.SetEventHandle(ready.SafeWaitHandle.DangerousGetHandle());
+                Guid iidCap = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317"); object o;
+                ac.GetService(ref iidCap, out o); cap = (IAudioCaptureClient)o;
+                DeviceName = exclude ? "Other apps" : "Game";
+                lock (gate)
+                {
+                    if (ring == null || Rate != rate) { capacity = rate * seconds; ring = new short[capacity * 2]; written = 0; t0 = -1; Rate = rate; }
+                }
+                ac.Start(); Error = "";
+                short[] tmp = new short[0];
+                float peak = 0; double peakAt = Now();
+                while (running)
+                {
+                    ready.WaitOne(100);
+                    int packet; cap.GetNextPacketSize(out packet);
+                    while (packet > 0 && running)
+                    {
+                        IntPtr data; int frames, flags; long devPos, qpc;
+                        cap.GetBuffer(out data, out frames, out flags, out devPos, out qpc);
+                        double t = (flags & 4) != 0 || qpc == 0 ? Now() : qpc / 1e7;
+                        if (tmp.Length < frames * 2) tmp = new short[frames * 2];
+                        if ((flags & 2) != 0) Array.Clear(tmp, 0, frames * 2);
+                        else Marshal.Copy(data, tmp, 0, frames * 2);
+                        cap.ReleaseBuffer(frames);
+                        for (int i = 0; i < frames * 2; i += 8) { float a = Math.Abs(tmp[i] / 32768f); if (a > peak) peak = a; }
+                        Put(tmp, frames, t);
+                        cap.GetNextPacketSize(out packet);
+                    }
+                    double now = Now();
+                    if (now - peakAt > 0.1) { Level = Math.Min(1f, peak); peak = 0; peakAt = now; }
+                }
+                ac.Stop();
+            }
+            finally
+            {
+                if (cap != null) Marshal.ReleaseComObject(cap);
+                Marshal.ReleaseComObject(ac);
+                if (fmt != IntPtr.Zero) Marshal.FreeCoTaskMem(fmt);
+                ready.Dispose();
+            }
+        }
+
         static unsafe float Sample(byte* frame, int c, int bits, bool isFloat)
         {
             if (isFloat) return ((float*)frame)[c];
@@ -310,6 +381,61 @@ namespace Clutch
                 byte[] raw = new byte[bytes]; Buffer.BlockCopy(buf, 0, raw, 0, bytes); w.Write(raw);
             }
             return true;
+        }
+    }
+
+    static class ProcessLoopback
+    {
+        [ComImport, Guid("41D949AB-9862-444A-80F6-C261334DA5EB"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface ICompletion { void ActivateCompleted(IOperation op); }
+
+        [ComImport, Guid("72A22D78-CDE4-431D-B8CC-843A71199B6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IOperation { void GetActivateResult([MarshalAs(UnmanagedType.Error)] out int hr, [MarshalAs(UnmanagedType.IUnknown)] out object iface); }
+
+        [ComImport, Guid("94ea2b94-e9cc-49e0-c0ff-ee64ca8f5b90"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IAgileObject { }
+
+        [DllImport("Mmdevapi.dll", ExactSpelling = true, PreserveSig = false)]
+        static extern void ActivateAudioInterfaceAsync([MarshalAs(UnmanagedType.LPWStr)] string path, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, IntPtr parms, ICompletion handler, out IOperation op);
+
+        class Handler : ICompletion, IAgileObject
+        {
+            public readonly ManualResetEvent Done = new ManualResetEvent(false);
+            public void ActivateCompleted(IOperation op) { try { Done.Set(); } catch { } }
+        }
+
+        static int build = -1;
+        public static bool Supported
+        {
+            get
+            {
+                if (build < 0)
+                {
+                    build = 0;
+                    try { using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion")) int.TryParse((k.GetValue("CurrentBuildNumber") ?? "0").ToString(), out build); } catch { }
+                }
+                return build >= 20348;
+            }
+        }
+
+        public static IAudioClient Activate(int pid, bool exclude)
+        {
+            IntPtr p = Marshal.AllocHGlobal(12), pv = Marshal.AllocHGlobal(24);
+            Handler h = new Handler();
+            try
+            {
+                Marshal.WriteInt32(p, 0, 1); Marshal.WriteInt32(p, 4, pid); Marshal.WriteInt32(p, 8, exclude ? 1 : 0);
+                for (int i = 0; i < 24; i++) Marshal.WriteByte(pv, i, 0);
+                Marshal.WriteInt16(pv, 0, 65); Marshal.WriteInt32(pv, 8, 12); Marshal.WriteIntPtr(pv, 16, p);
+                IOperation op;
+                ActivateAudioInterfaceAsync(@"VAD\Process_Loopback", typeof(IAudioClient).GUID, pv, h, out op);
+                if (!h.Done.WaitOne(5000)) throw new Exception("Game audio didn't start in time");
+                int hr; object o; op.GetActivateResult(out hr, out o);
+                if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+                Marshal.ReleaseComObject(op);
+                return (IAudioClient)o;
+            }
+            finally { Marshal.FreeHGlobal(p); Marshal.FreeHGlobal(pv); h.Done.Close(); }
         }
     }
 }

@@ -106,6 +106,7 @@ namespace Clutch
         public double Duration { get { Guid g = Guid.Empty; PropVariant v; return p != null && p.GetDuration(ref g, out v) >= 0 ? v.Value / 1e7 : 0; } }
 
         public float Volume { set { if (p != null) p.SetVolume(Math.Max(0, Math.Min(1, value))); } }
+        public float Rate { set { if (p != null) p.SetRate(value); } }
 
         public Size VideoSize { get { MfSize s, a; return p != null && p.GetNativeVideoSize(out s, out a) >= 0 ? new Size(s.W, s.H) : Size.Empty; } }
 
@@ -286,6 +287,17 @@ namespace Clutch
 
         public void TogglePlay() { if (Playing) Pause(); else Play(); }
 
+        float rate = 1;
+        public float Rate
+        {
+            get { return rate; }
+            set { rate = value; if (mf != null) { mf.Rate = value; return; } try { if (host != null) host.P.settings.rate = value; } catch { } }
+        }
+
+        public void Step(int frames) { Pause(); Position = Math.Max(0, Position + frames / 60.0); }
+
+        public string File_ { get { return path; } }
+
         public void FullScreen()
         {
             if (mf != null)
@@ -398,44 +410,53 @@ namespace Clutch
     class Timeline : Ctl
     {
         public double Length = 1, Position, In, Out = 1;
+        public double LoopA = -1, LoopB = -1;
         public bool TrimMode;
         public List<Bitmap> Strip = new List<Bitmap>();
         public event Action<double> Seek;
         public event Action RangeChanged;
-        int drag;
+        int drag, hoverX = -1;
 
         public Timeline() { Cursor = Cursors.Hand; }
 
-        RectangleF Track { get { return TrimMode ? new RectangleF(S(14), S(6), Width - S(28), Height - S(12)) : new RectangleF(S(8), Height / 2f - S(2), Width - S(16), S(4)); } }
+        int HandleW { get { return S(14); } }
+        RectangleF Track { get { return TrimMode ? new RectangleF(S(18), S(28), Width - S(36), Height - S(32)) : new RectangleF(S(8), Height / 2f - S(2), Width - S(16), S(4)); } }
         float X(double t) { RectangleF r = Track; return r.X + (float)(Math.Max(0, Math.Min(1, t / Math.Max(0.001, Length))) * r.Width); }
         double T(int x) { RectangleF r = Track; return Math.Max(0, Math.Min(Length, (x - r.X) / Math.Max(1, r.Width) * Length)); }
+
+        int HandleAt(int x)
+        {
+            float xi = X(In), xo = X(Out);
+            if (x >= xi - HandleW - S(4) && x <= xi + S(4)) return 2;
+            if (x >= xo - S(4) && x <= xo + HandleW + S(4)) return 3;
+            return 0;
+        }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
             if (e.Button != MouseButtons.Left) return;
-            drag = 1;
-            if (TrimMode)
-            {
-                if (Math.Abs(e.X - X(In)) < S(12)) drag = 2;
-                else if (Math.Abs(e.X - X(Out)) < S(12)) drag = 3;
-            }
+            drag = TrimMode ? Math.Max(1, HandleAt(e.X)) : 1;
             Capture = true; MoveTo(e.X);
         }
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (drag != 0) MoveTo(e.X);
-            else if (TrimMode) Cursor = Math.Abs(e.X - X(In)) < S(12) || Math.Abs(e.X - X(Out)) < S(12) ? Cursors.SizeWE : Cursors.Hand;
+            if (drag != 0) { MoveTo(e.X); return; }
+            if (!TrimMode) return;
+            Cursor = HandleAt(e.X) != 0 ? Cursors.SizeWE : Cursors.Hand;
+            if (hoverX != e.X) { hoverX = e.X; Invalidate(); }
         }
-        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); drag = 0; Capture = false; }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hoverX >= 0) { hoverX = -1; Invalidate(); } }
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); drag = 0; Capture = false; Invalidate(); }
 
         void MoveTo(int x)
         {
             double t = T(x), minLen = Math.Min(0.5, Length / 4);
             if (drag == 1) { Position = t; if (Seek != null) Seek(t); }
-            else if (drag == 2) { In = Math.Min(t, Out - minLen); In = Math.Max(0, In); Position = In; if (RangeChanged != null) RangeChanged(); if (Seek != null) Seek(In); }
-            else if (drag == 3) { Out = Math.Max(t, In + minLen); Out = Math.Min(Length, Out); Position = Out; if (RangeChanged != null) RangeChanged(); if (Seek != null) Seek(Out); }
+            else if (drag == 2) { In = Math.Max(0, Math.Min(t, Out - minLen)); Position = In; if (RangeChanged != null) RangeChanged(); if (Seek != null) Seek(In); }
+            else if (drag == 3) { Out = Math.Min(Length, Math.Max(t, In + minLen)); Position = Out; if (RangeChanged != null) RangeChanged(); if (Seek != null) Seek(Out); }
+            hoverX = x;
             Invalidate();
         }
 
@@ -447,48 +468,97 @@ namespace Clutch
                 float h = hover.Value;
                 RectangleF tr = new RectangleF(r.X, r.Y - h, r.Width, r.Height + 2 * h);
                 Ui.FillRound(g, tr, tr.Height / 2, C.Control);
+                if (LoopA >= 0 || LoopB >= 0) { float la = X(LoopA >= 0 ? LoopA : 0), lb = X(LoopB > LoopA ? LoopB : Length); Ui.FillRound(g, new RectangleF(la, tr.Y - S(3), Math.Max(S(4), lb - la), tr.Height + S(6)), S(3), Ui.Alpha(C.AccentHi, 70)); }
                 float px = X(Position);
                 Ui.FillRound(g, new RectangleF(r.X, tr.Y, px - r.X, tr.Height), tr.Height / 2, C.Accent);
                 float d = S(10) + S(4) * h;
                 using (SolidBrush b = new SolidBrush(Color.White)) g.FillEllipse(b, px - d / 2, Height / 2f - d / 2, d, d);
                 return;
             }
-            using (GraphicsPath clip = Ui.Round(r, S(8)))
+            float rad = S(10), hw = HandleW;
+            DrawStrip(g, r);
+            float xi = X(In), xo = X(Out);
+            using (GraphicsPath clip = Ui.Round(r, rad))
             {
-                g.SetClip(clip);
-                using (SolidBrush b = new SolidBrush(C.Control)) g.FillRectangle(b, r);
-                if (Strip.Count > 0)
-                {
-                    float fw = r.Width / Strip.Count;
-                    g.InterpolationMode = InterpolationMode.Bilinear;
-                    for (int i = 0; i < Strip.Count; i++)
-                    {
-                        Bitmap bm = Strip[i]; if (bm == null) continue;
-                        float s = Math.Max(fw / bm.Width, r.Height / bm.Height), w = bm.Width * s, h = bm.Height * s;
-                        RectangleF cell = new RectangleF(r.X + i * fw, r.Y, fw + 1, r.Height);
-                        g.SetClip(clip); g.SetClip(cell, CombineMode.Intersect);
-                        g.DrawImage(bm, cell.X + (fw - w) / 2, cell.Y + (r.Height - h) / 2, w, h);
-                    }
-                    g.SetClip(clip);
-                }
-                float xi = X(In), xo = X(Out);
-                using (SolidBrush dim = new SolidBrush(Color.FromArgb(170, 10, 10, 12)))
+                Region before = g.Clip; g.SetClip(clip, CombineMode.Intersect);
+                using (SolidBrush dim = new SolidBrush(Color.FromArgb(200, 12, 11, 18)))
                 {
                     g.FillRectangle(dim, r.X, r.Y, xi - r.X, r.Height);
                     g.FillRectangle(dim, xo, r.Y, r.Right - xo, r.Height);
                 }
-                g.ResetClip();
-                RectangleF keep = new RectangleF(xi, r.Y, xo - xi, r.Height);
-                using (Pen p = new Pen(C.Accent, S(2.5f))) g.DrawRectangle(p, keep.X, keep.Y + S(1), keep.Width, keep.Height - S(2));
-                foreach (float hx in new[] { xi, xo })
-                {
-                    RectangleF hr = new RectangleF(hx - S(6), r.Y - S(2), S(12), r.Height + S(4));
-                    Ui.FillRound(g, hr, S(4), C.Accent);
-                    using (Pen p = new Pen(Color.FromArgb(200, 255, 255, 255), S(1.5f))) g.DrawLine(p, hx, hr.Y + hr.Height * 0.35f, hx, hr.Bottom - hr.Height * 0.35f);
-                }
-                float px = X(Position);
-                Ui.FillRound(g, new RectangleF(px - S(1.5f), r.Y - S(5), S(3), r.Height + S(10)), S(1.5f), Color.White);
+                g.Clip = before;
             }
+
+            RectangleF outer = new RectangleF(xi - hw, r.Y - S(2), xo - xi + hw * 2, r.Height + S(4));
+            RectangleF inner = new RectangleF(xi, r.Y + S(2), xo - xi, r.Height - S(4));
+            Color frameC = drag >= 2 ? C.AccentHi : C.Accent;
+            using (GraphicsPath fp = Ui.Round(outer, S(10)))
+            using (GraphicsPath ip = Ui.Round(inner, S(4)))
+            {
+                fp.AddPath(ip, false); fp.FillMode = FillMode.Alternate;
+                using (SolidBrush fb = new SolidBrush(frameC)) g.FillPath(fb, fp);
+            }
+            for (int k = 0; k < 2; k++)
+            {
+                float cx = k == 0 ? xi - hw / 2 : xo + hw / 2, cy = r.Y + r.Height / 2, a = S(4);
+                using (Pen p = new Pen(Color.White, S(2))) { p.StartCap = p.EndCap = LineCap.Round; p.LineJoin = LineJoin.Round; float dir = k == 0 ? 1 : -1; g.DrawLines(p, new[] { new PointF(cx + dir * a / 2, cy - a), new PointF(cx - dir * a / 2, cy), new PointF(cx + dir * a / 2, cy + a) }); }
+            }
+
+            if (hoverX >= 0 && drag == 0 && hoverX >= r.X && hoverX <= r.Right)
+                using (Pen hp = new Pen(Color.FromArgb(110, 255, 255, 255), 1)) g.DrawLine(hp, hoverX, r.Y, hoverX, r.Bottom);
+
+            float ph = X(Position);
+            using (SolidBrush sh = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillRectangle(sh, ph - S(2.5f), r.Y - S(4), S(5), r.Height + S(8));
+            Ui.FillRound(g, new RectangleF(ph - S(1.5f), r.Y - S(4), S(3), r.Height + S(8)), S(1.5f), Color.White);
+
+            double bt; float bx; bool accent = drag >= 2;
+            if (drag == 2) { bt = In; bx = xi; }
+            else if (drag == 3) { bt = Out; bx = xo; }
+            else if (drag == 1) { bt = Position; bx = ph; }
+            else if (hoverX >= r.X && hoverX <= r.Right) { bt = T(hoverX); bx = hoverX; }
+            else { bt = Position; bx = ph; }
+            Font lf = Ui.F(8.5f, 5); string s = Stamp(bt);
+            int bw = Ui.Measure(s, lf).Width + S(14), bh = S(20);
+            Rectangle br = new Rectangle((int)Math.Max(0, Math.Min(Width - bw, bx - bw / 2f)), 0, bw, bh);
+            Ui.FillRound(g, br, bh / 2f, accent ? C.Accent : Color.White);
+            Ui.TextCenter(g, s, lf, br, accent ? Color.White : Color.FromArgb(20, 18, 30));
+        }
+
+        static string Stamp(double s) { int m = (int)(s / 60); return m + ":" + (s - m * 60).ToString("00.0", System.Globalization.CultureInfo.InvariantCulture); }
+
+        Bitmap stripCache; List<Bitmap> stripFor; Size stripSize;
+
+        void DrawStrip(Graphics g, RectangleF r)
+        {
+            Size want = new Size((int)r.Width, (int)r.Height);
+            if (want.Width < 2 || want.Height < 2) return;
+            if (stripCache == null || stripFor != Strip || stripSize != want)
+            {
+                if (stripCache != null) stripCache.Dispose();
+                stripFor = Strip; stripSize = want;
+                stripCache = new Bitmap(want.Width, want.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using (Graphics sg = Graphics.FromImage(stripCache))
+                {
+                    sg.SmoothingMode = SmoothingMode.AntiAlias; sg.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                    using (GraphicsPath clip = Ui.Round(new RectangleF(0, 0, want.Width, want.Height), S(10)))
+                    {
+                        using (SolidBrush b = new SolidBrush(C.Control)) sg.FillPath(b, clip);
+                        if (Strip.Count > 0)
+                        {
+                            float fw = want.Width / (float)Strip.Count;
+                            for (int i = 0; i < Strip.Count; i++)
+                            {
+                                Bitmap bm = Strip[i]; if (bm == null) continue;
+                                float s = Math.Max(fw / bm.Width, want.Height / (float)bm.Height), w = bm.Width * s, h = bm.Height * s;
+                                RectangleF cell = new RectangleF(i * fw, 0, fw + 1, want.Height);
+                                sg.SetClip(clip); sg.SetClip(cell, CombineMode.Intersect);
+                                sg.DrawImage(bm, cell.X + (fw - w) / 2, (want.Height - h) / 2, w, h);
+                            }
+                        }
+                    }
+                }
+            }
+            g.DrawImageUnscaled(stripCache, (int)r.X, (int)r.Y);
         }
     }
 }

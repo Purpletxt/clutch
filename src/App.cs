@@ -24,7 +24,7 @@ namespace Clutch
     static class AppInfo
     {
         public const string Name = "Clutch";
-        public const string Version = "1.0.7";
+        public const string Version = "1.0.9";
     }
 
     static class Program
@@ -173,6 +173,9 @@ namespace Clutch
         public bool DesktopAudio = true;
         public string DesktopDevice = "";
         public bool Mic = false;
+        public bool SplitGameAudio = true;
+        public bool HoldClip = false;
+        public double HoldSeconds = 0.5;
         public string MicDevice = "";
         public int MicVolume = 100;
         public string ClipsFolder = "";
@@ -184,6 +187,11 @@ namespace Clutch
         public bool TrayHintShown = false;
         public bool WelcomeDone = false;
         public bool DiscordStatus = true;
+        public int DiscordMB = 10;
+        public bool DiscordSwitcher = true;
+        public bool GameChips = true;
+        public bool FoldClips = false;
+        public bool FoldFavourites = false;
         public bool AutoUpdate = true;
         public string UpdatedTo = "";
         public string ProbeKey = "";
