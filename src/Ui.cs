@@ -278,10 +278,10 @@ namespace Clutch
     static class Glyph
     {
         public const string Play = "\uE768", Pause = "\uE769", Back = "\uE72B", Star = "rail:star-line", StarFill = "rail:star",
-            Delete = "\uE74D", Rename = "\uE70F", Copy = "\uE8C8", Folder = "\uE838", Cut = "\uE8C6", Settings = "rail:settings", Video = "\uE714",
-            Search = "\uE721", Add = "\uE710", Close = "\uE711", Mic = "\uE720", Volume = "\uE767", Game = "rail:games",
+            Delete = "\uE74D", Rename = "\uE70F", Copy = "\uE8C8", Folder = "\uE838", Cut = "\uE8C6", Settings = "\uE713", Video = "\uE714",
+            Search = "\uE721", Add = "\uE710", Close = "\uE711", Mic = "\uE720", Volume = "\uE767", Game = "\uE7FC",
             Check = "\uE73E", Download = "\uE896", More = "\uE712", Info = "\uE946", Warning = "\uE7BA", Monitor = "\uE7F4",
-            Film = "rail:clips", Keyboard = "\uE92E", Clock = "\uE823", Save = "\uE74E", Share = "\uE72D", Undo = "\uE7A7", Mute = "\uE74F",
-            Down = "\uE70D", Up = "\uE70E";
+            Film = "\uE714", Keyboard = "\uE92E", Clock = "\uE823", Save = "\uE74E", Share = "\uE72D", Undo = "\uE7A7", Mute = "\uE74F",
+            Down = "\uE70D", Up = "\uE70E", Discord = "rail:discord", Import = "\uE8B5";
     }
 }

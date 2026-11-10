@@ -25,6 +25,8 @@ namespace Clutch
         readonly Slider volume = new Slider();
         readonly Timeline seek = new Timeline();
         readonly Card frame = new Card();
+        readonly Panel bar = new Panel();
+        Point lastMouse; DateTime lastMove = DateTime.Now;
         readonly Timer timer = new Timer();
 
         public ViewerPage(MainForm m) : base(m)
@@ -66,7 +68,10 @@ namespace Clutch
             shot.Click += delegate { Screenshot(); };
             frame.Fill = Color.Black; frame.Padding = new Padding(1);
             frame.Controls.Add(Video);
-            foreach (Control c in new Control[] { back, title, edit, underline, meta, prev, next, fav, rename, folder, delete, trim, discord, frame, play, time, seek, vol, volume, full, external, stepBack, stepFwd, speed, loop, shot }) Controls.Add(c);
+            foreach (Control c in new Control[] { back, title, edit, underline, meta, prev, next, fav, rename, folder, delete, trim, discord, frame, bar, external }) Controls.Add(c);
+            bar.BackColor = Color.FromArgb(18, 16, 26);
+            bar.Paint += delegate (object o, PaintEventArgs e) { using (Pen p = new Pen(Color.FromArgb(40, 255, 255, 255))) e.Graphics.DrawLine(p, 0, 0, bar.Width, 0); };
+            foreach (Control c in new Control[] { play, stepBack, stepFwd, seek, time, speed, loop, shot, vol, volume, full }) { c.BackColor = bar.BackColor; bar.Controls.Add(c); }
             timer.Interval = 100; timer.Tick += delegate { Tick(); };
         }
 
@@ -95,6 +100,7 @@ namespace Clutch
         public void Open(Clip c)
         {
             if (renaming) EndRename(false);
+            soundChecked = false;
             loopA = loopB = -1; SyncLoop(); Video.Rate = 1; speed.Text = Rate(1); speed.Invalidate();
             Clip = c; Sync();
             seek.Length = Math.Max(0.1, c.Duration); seek.Position = 0;
@@ -128,6 +134,31 @@ namespace Clutch
             Video.Close();
             Main.DeleteClips(new List<Clip> { gone });
             if (n != null) { Main.Go(this); Open(n); }
+        }
+
+        bool soundChecked; static bool soundWarned;
+
+        void CheckSound()
+        {
+            soundChecked = true;
+            int a = Video.AudioState;
+            if (a != 0 && a != 1) return;
+            string path = Clip.Path;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                if (FFmpeg.AudioTracks(path).Count == 0) return;
+                Log.Info("Video player", "Windows is playing " + System.IO.Path.GetFileName(path) + " without sound (audio " + (a == 0 ? "not found" : "found but off") + "). The Windows audio decoder may be missing.");
+                if (soundWarned) return;
+                soundWarned = true;
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        Main.Toast.Show(Glyph.Warning, "Windows can't play this clip's sound on this PC, but the clip has sound. Open it in your video app, or reinstall Windows' media features.", "Open", delegate { Video.Pause(); Video.OpenExternally(); }, 10000);
+                    });
+                }
+                catch { }
+            });
         }
 
         double LoopStart { get { return loopA >= 0 ? loopA : 0; } }
@@ -181,6 +212,7 @@ namespace Clutch
 
         public bool Key(Keys k, bool ctrl)
         {
+            lastMove = DateTime.Now;
             switch (k)
             {
                 case Keys.Space: Video.TogglePlay(); return true;
@@ -217,14 +249,15 @@ namespace Clutch
             underline.SetBounds(pad, S(86), edit.Width, S(2));
             rename.SetBounds((edit.Visible ? edit.Right : title.Right) + S(4), S(55), S(32), S(32));
             meta.SetBounds(pad, S(86), Math.Max(S(100), x - pad - S(10)), S(22));
-            int top = S(122), bottom = h - S(70);
+            int top = S(122), bottom = h - S(20);
             int vw = w - pad * 2, vh = bottom - top;
             double ar = Video.Aspect > 0 ? Video.Aspect : VideoView.DefaultAspect(); shownAspect = ar;
             int fw = Math.Min(vw, (int)(vh * ar)), fh = (int)(fw / ar);
             frame.SetBounds((w - fw) / 2, top + (vh - fh) / 2, fw, fh);
             Video.SetBounds(S(4), S(4), fw - S(8), fh - S(8));
-            int ty = h - S(54), right = Math.Max(frame.Right, S(400));
-            play.SetBounds(frame.Left - S(4), ty, S(40), S(40));
+            bar.SetBounds(frame.Left + S(4), frame.Bottom - S(4) - S(54), Math.Max(S(420), frame.Width - S(8)), S(54)); bar.BringToFront();
+            int ty = S(7), right = bar.Width - S(6);
+            play.SetBounds(S(6), ty, S(40), S(40));
             stepBack.SetBounds(play.Right, ty, S(34), S(40)); stepFwd.SetBounds(stepBack.Right, ty, S(34), S(40));
             full.SetBounds(right - S(36), ty, S(40), S(40));
             volume.SetBounds(full.Left - S(120), ty, S(114), S(40));
@@ -242,9 +275,15 @@ namespace Clutch
         {
             double va = Video.Aspect; if (va > 0 && Math.Abs(va - shownAspect) > 0.01) Relayout();
             Video.Poll();
+            Point mouse = Cursor.Position;
+            if (mouse != lastMouse) { lastMouse = mouse; lastMove = DateTime.Now; }
+            Rectangle area = frame.RectangleToScreen(frame.ClientRectangle);
+            bool keep = !Video.Playing || bar.RectangleToScreen(bar.ClientRectangle).Contains(mouse) || (area.Contains(mouse) && (DateTime.Now - lastMove).TotalSeconds < 2.5) || (DateTime.Now - lastMove).TotalSeconds < 0.3;
+            if (bar.Visible != keep) bar.Visible = keep;
             double len = Video.Length; if (len > 0) seek.Length = len;
             seek.Position = Video.Position; seek.Invalidate();
             if (looping && Video.Playing && Video.Position >= LoopEnd - 0.03) Video.Position = LoopStart;
+            if (!soundChecked && Clip != null && Video.Playing && Video.Position > 1) CheckSound();
             string pi = Video.Playing ? Glyph.Pause : Glyph.Play;
             if (play.Icon != pi) { play.Icon = pi; play.Invalidate(); }
             string t = Library.NiceTime(seek.Position <= 0 ? 0.01 : seek.Position) + " / " + Library.NiceTime(seek.Length);

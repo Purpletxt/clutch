@@ -9,6 +9,17 @@ namespace Clutch
     class NavRail : Ctl
     {
         readonly MainForm main;
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x84)
+            {
+                long lp = m.LParam.ToInt64();
+                Point p = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+                if (p.Y < S(64) || (main.WindowState != FormWindowState.Maximized && p.Y < S(6))) { m.Result = (IntPtr)(-1); return; }
+            }
+            base.WndProc(ref m);
+        }
         class Item { public string Icon, Label; public Rectangle R; public Action Click; public Func<bool> Active; }
         readonly List<Item> items = new List<Item>();
         int hot = -1;
@@ -35,7 +46,7 @@ namespace Clutch
         string lastMeter = "";
         public void Tick()
         {
-            string m = Recorder.Now + "|" + (int)Recorder.SecondsHeld + "|" + Settings.Cur.BufferSeconds + "|" + Settings.Cur.Enabled + "|" + Games.Running + "|" + FFmpeg.Ready + "|" + main.DownloadPercent;
+            string m = Recorder.Now + "|" + (int)Recorder.SecondsHeld + "|" + Settings.Cur.BufferSeconds + "|" + Settings.Cur.Enabled + "|" + Games.Running + "|" + FFmpeg.Ready + "|" + main.DownloadPercent + "|" + Recorder.Struggling;
             if (m != lastMeter) { lastMeter = m; Invalidate(); }
         }
 
@@ -54,7 +65,7 @@ namespace Clutch
             base.OnMouseMove(e); Place();
             int h = items.FindIndex(delegate (Item i) { return i.R.Contains(e.Location); });
             if (h < 0 && meter.Contains(e.Location)) h = 99;
-            if (h != hot) { hot = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            if (h != hot) { hot = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; tip.SetToolTip(this, h == 99 ? tipText : null); Invalidate(); }
         }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hot = -1; Invalidate(); }
         protected override void OnMouseClick(MouseEventArgs e)
@@ -68,43 +79,42 @@ namespace Clutch
 
         static string Secs(double s) { int t = (int)s; return t < 60 ? t + "s" : (t / 60) + ":" + (t % 60).ToString("00"); }
 
+        readonly ToolTip tip = new ToolTip();
+        string tipText = "";
+
         void DrawBuffer(Graphics g, Rectangle below)
         {
-            int w = Width - S(20), h = S(78);
+            int w = Width - S(20), h = S(66);
             Rectangle box = meter = new Rectangle(S(10), below.Y - h - S(12), w, h);
-            Ui.FillRound(g, box, S(10), hot == 99 ? C.Control : C.Panel);
             bool rec = Recorder.Now == Recorder.State.Recording && Settings.Cur.Enabled && FFmpeg.Ready;
             int len = Settings.Cur.BufferSeconds;
             double held = rec ? Math.Min(len, Recorder.SecondsHeld) : 0;
             if (Program.Demo) { rec = true; held = Math.Min(len, 42); }
-            string big, small; Color bigC = C.Text;
-            string label = rec ? "READY" : "REPLAY";
-            if (rec) { big = Secs(held); small = "of " + Secs(len); }
-            else if (!FFmpeg.Ready) { big = main.Downloading ? main.DownloadPercent + "%" : "SETUP"; small = main.Downloading ? "downloading" : "needed"; bigC = C.Warn; }
-            else if (!Settings.Cur.Enabled) { big = "OFF"; small = "buffer"; bigC = C.Faint; }
-            else if (Settings.Cur.GamesOnly && Games.Running == "") { big = "WAIT"; small = "for a game"; bigC = C.Sub; }
-            else if (Recorder.Now == Recorder.State.Error) { big = "!"; small = "see log"; bigC = C.Warn; }
-            else { big = "..."; small = "starting"; bigC = C.Warn; }
-            Color dot = rec ? C.Live : C.Faint;
-            int dd = S(6), lx = box.X + S(9), ly = box.Y + S(10);
-            if (rec)
-            {
-                float pulse = 0.7f;
-                using (SolidBrush halo = new SolidBrush(Ui.Alpha(C.Live, (int)(80 * pulse)))) g.FillEllipse(halo, lx - S(3), ly - S(3), dd + S(6), dd + S(6));
-            }
-            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, lx, ly, dd, dd);
-            Ui.TextLeft(g, label, Ui.F(6.5f, 1), new Rectangle(lx + S(10), ly - S(5), box.Width, S(16)), C.Sub);
-            Ui.TextCenter(g, big, Ui.F(13, 4), new Rectangle(box.X, box.Y + S(20), box.Width, S(26)), bigC);
-            Ui.TextCenter(g, small, Ui.F(7, 0), new Rectangle(box.X, box.Y + S(44), box.Width, S(14)), C.Faint);
-            int n = 4, gap = S(3), sx = box.X + S(8), sw = (box.Width - S(16) - gap * (n - 1)) / n, sy = box.Bottom - S(13);
+            bool slow = rec && Recorder.Struggling;
+            string big; Color bigC = C.Text;
+            if (rec) big = Secs(held);
+            else if (!FFmpeg.Ready) { big = main.Downloading ? main.DownloadPercent + "%" : "Setup"; bigC = C.Warn; }
+            else if (!Settings.Cur.Enabled) { big = "Off"; bigC = C.Faint; }
+            else if (Settings.Cur.GamesOnly && Games.Running == "") { big = "Wait"; bigC = C.Sub; }
+            else if (Recorder.Now == Recorder.State.Error) { big = "!"; bigC = C.Warn; }
+            else { big = "\u2026"; bigC = C.Warn; }
+            RectangleF rf = new RectangleF(box.X + 0.5f, box.Y + 0.5f, box.Width - 1, box.Height - 1);
+            Ui.FillRound(g, rf, S(14), hot == 99 ? C.Control : C.Panel);
+            Ui.StrokeRound(g, rf, S(14), slow ? Ui.Alpha(C.Warn, 110) : rec ? Ui.Alpha(C.Live, 90) : Ui.Mix(C.Panel, C.Text, 0.08f), 1);
+            int top = box.Y + S(9), dd = S(8);
+            Bitmap icon = rec && Games.Running.Length > 0 ? GameIcons.Get(Games.Running) : null;
+            int rowW = dd + (icon != null ? S(6) + S(16) : 0), rx = box.X + (box.Width - rowW) / 2;
+            Color dot = slow ? C.Warn : rec ? C.Live : Settings.Cur.Enabled && FFmpeg.Ready ? C.Warn : C.Faint;
+            if (rec) using (SolidBrush halo = new SolidBrush(Ui.Alpha(dot, 70))) g.FillEllipse(halo, rx - S(3), top + S(4) - S(3), dd + S(6), dd + S(6));
+            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, rx, top + S(4), dd, dd);
+            if (icon != null) { g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic; g.DrawImage(icon, new Rectangle(rx + dd + S(6), top, S(16), S(16))); }
+            Ui.TextCenter(g, big, Ui.F(12, 4), new Rectangle(box.X, top + S(17), box.Width, S(24)), bigC);
+            RectangleF bar = new RectangleF(box.X + S(10), box.Bottom - S(11), box.Width - S(20), S(4));
+            Ui.FillRound(g, bar, S(2), C.Control);
             double frac = len > 0 ? held / len : 0;
-            for (int i = 0; i < n; i++)
-            {
-                RectangleF seg = new RectangleF(sx + i * (sw + gap), sy, sw, S(5));
-                Ui.FillRound(g, seg, S(2), C.Control);
-                double part = Math.Max(0, Math.Min(1, frac * n - i));
-                if (part > 0) Ui.FillAccent(g, new RectangleF(seg.X, seg.Y, Math.Max(S(2), seg.Width * (float)part), seg.Height), S(2), 0, 255);
-            }
+            if (frac > 0) Ui.FillAccent(g, new RectangleF(bar.X, bar.Y, Math.Max(S(4), bar.Width * (float)frac), bar.Height), S(2), 0, 255);
+            string t = (slow ? Recorder.HealthNote + "\n\n" : "") + main.Bar.StatusText() + (rec ? "\nHolding " + Secs(held) + " of " + Secs(len) + ". Press " + MainForm.HotkeyName() + " to save it." : "") + "\nClick for options.";
+            if (t != tipText) { tipText = t; if (hot == 99) tip.SetToolTip(this, t); }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -128,133 +138,4 @@ namespace Clutch
         }
     }
 
-    class TopBar : Ctl
-    {
-        readonly MainForm main;
-        readonly Btn save;
-        Rectangle chipKey, chipQuality; int hot = -1;
-
-        public TopBar(MainForm m)
-        {
-            main = m; BackColor = C.Chrome;
-            save = new Btn("Save clip", Glyph.Film, BtnStyle.Accent); save.Round = true;
-            save.Click += delegate { main.SaveClip(); };
-            Controls.Add(save);
-        }
-        public void SyncToggle() { Invalidate(); }
-
-        protected override void OnLayout(LayoutEventArgs e)
-        {
-            base.OnLayout(e);
-            if (save == null) return;
-            save.Height = S(36); save.Width = save.PreferredWidth() + S(6);
-            save.Location = new Point(Width - save.Width - S(18), (Height - save.Height) / 2);
-        }
-
-        public string StatusText()
-        {
-            Settings s = Settings.Cur;
-            if (!FFmpeg.Ready) return main.Downloading ? "Setting up\u2026 " + main.DownloadPercent + "%" : "Setup needed";
-            if (!s.Enabled) return "Replay buffer off";
-            if (s.GamesOnly && Games.Running == "") return s.Games.Count == 0 ? "Pick a game to record" : "Start your game to record";
-            switch (Recorder.Now)
-            {
-                case Recorder.State.Recording: return Games.Running != "" ? "Recording \u00B7 " + Games.Running : "Recording";
-                case Recorder.State.Starting: return Recorder.Status;
-                case Recorder.State.Error: return Recorder.Status;
-            }
-            return "Replay buffer off";
-        }
-
-        static string LengthName(int s) { return s < 120 ? s + "s" : (s / 60) + " min"; }
-
-        string QualityText()
-        {
-            Size o = Recorder.OutputSize();
-            int h = o.IsEmpty ? Recorder.MonitorBounds(Settings.Cur.Monitor).Height : o.Height;
-            return h + "p  " + Settings.Cur.Fps + "fps";
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            base.OnMouseMove(e);
-            int h = chipKey.Contains(e.Location) ? 1 : chipQuality.Contains(e.Location) ? 2 : -1;
-            if (h != hot) { hot = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
-        }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hot = -1; Invalidate(); }
-
-        protected override void OnMouseClick(MouseEventArgs e)
-        {
-            base.OnMouseClick(e);
-            if (e.Button != MouseButtons.Left) return;
-            Settings s = Settings.Cur;
-            ContextMenuStrip m = Menus.Make(); Rectangle at;
-            if (chipKey.Contains(e.Location))
-            {
-                at = chipKey;
-                foreach (int len in new[] { 30, 60, 120, 180 })
-                {
-                    int l = len;
-                    Check(m, "Save the last " + (l < 120 ? l + " seconds" : (l / 60) + " minutes"), s.BufferSeconds == l, delegate { s.BufferSeconds = l; Settings.Save(); main.RestartRecorder(); main.SettingsP.Reload(); Invalidate(); });
-                }
-                m.Items.Add(new ToolStripSeparator());
-                Menus.Item(m, "Change clip key\u2026", Glyph.Keyboard, delegate { main.Go(main.SettingsP); main.SettingsP.ScrollTo("settings"); });
-            }
-            else if (chipQuality.Contains(e.Location))
-            {
-                at = chipQuality;
-                Check(m, "60 fps", s.Fps == 60, delegate { s.Fps = 60; Changed(); });
-                Check(m, "30 fps", s.Fps == 30, delegate { s.Fps = 30; Changed(); });
-                m.Items.Add(new ToolStripSeparator());
-                string[] q = { "Low quality", "Standard quality", "High quality" };
-                for (int i = 2; i >= 0; i--) { int k = i; Check(m, q[i], s.Quality == i, delegate { s.Quality = k; Changed(); }); }
-                m.Items.Add(new ToolStripSeparator());
-                string[] res = { "Native resolution", "1080p (uses more CPU)", "720p (uses more CPU)" };
-                for (int i = 0; i < 3; i++) { int k = i; Check(m, res[i], s.Resolution == i, delegate { s.Resolution = k; Changed(); }); }
-            }
-            else { m.Dispose(); return; }
-            m.Show(this, new Point(at.X, at.Bottom + S(4)));
-        }
-
-        void Changed() { Settings.Save(); main.RestartRecorder(); main.SettingsP.Reload(); Invalidate(); }
-
-        static void Check(ContextMenuStrip m, string text, bool on, Action a)
-        {
-            ToolStripMenuItem it = new ToolStripMenuItem(text); it.Checked = on; it.Click += delegate { a(); }; m.Items.Add(it);
-        }
-
-        Rectangle Chip(Graphics g, int x, int w, int i)
-        {
-            int h = S(34); Rectangle r = new Rectangle(x, (Height - h) / 2, w, h);
-            Ui.FillRound(g, r, S(8), hot == i ? C.Control : C.Panel);
-            Ui.DrawIcon(g, "\uE70D", 7, new Rectangle(r.Right - S(24), r.Y, S(16), r.Height), C.Sub);
-            return r;
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = Begin(e);
-            int x = S(16); Font f = Ui.F(9.5f, 1); int w;
-
-            string key = MainForm.HotkeyName(), len = "Clip " + LengthName(Settings.Cur.BufferSeconds);
-            Font kf = Ui.F(8.5f, 1);
-            int kw = Math.Max(S(28), Ui.Measure(key, kf).Width + S(14));
-            w = S(10) + kw + S(10) + Ui.Measure(len, f).Width + S(34);
-            chipKey = Chip(g, x, w, 1);
-            Rectangle cap = new Rectangle(x + S(8), chipKey.Y + S(6), kw, chipKey.Height - S(12));
-            Ui.FillRound(g, cap, S(5), C.ControlHi);
-            Ui.FillRound(g, new Rectangle(cap.X, cap.Bottom - S(3), cap.Width, S(3)), S(2), C.Stroke);
-            Ui.TextCenter(g, key, kf, new Rectangle(cap.X, cap.Y, cap.Width, cap.Height - S(2)), C.Text);
-            Ui.TextLeft(g, len, f, new Rectangle(cap.Right + S(10), chipKey.Y, w, chipKey.Height - S(1)), C.Text);
-            x = chipKey.Right + S(8);
-
-            string q = QualityText();
-            w = Ui.Measure(q, f).Width + S(58);
-            chipQuality = Chip(g, x, w, 2);
-            Ui.DrawIcon(g, Glyph.Monitor, 10, new Rectangle(x + S(10), chipQuality.Y, S(18), chipQuality.Height), C.Text);
-            Ui.TextLeft(g, q, f, new Rectangle(x + S(34), chipQuality.Y, w, chipQuality.Height - S(1)), C.Text);
-
-            using (Pen p = new Pen(C.Panel)) g.DrawLine(p, 0, Height - 1, Width, Height - 1);
-        }
-    }
 }

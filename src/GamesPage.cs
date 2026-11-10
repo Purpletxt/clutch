@@ -169,6 +169,15 @@ namespace Clutch
         void DrawTile(Graphics g, Game gm, Rectangle r, bool h)
         {
             float rad = S(14);
+            if (h)
+            {
+                r.Offset(0, -S(4));
+                for (int i = 0; i < 6; i++)
+                {
+                    RectangleF sr = new RectangleF(r.X - i * S(2), r.Y + S(10) - i * S(1), r.Width + i * S(4), r.Height + i * S(3));
+                    using (GraphicsPath sp = Ui.Round(sr, rad + i * S(2))) using (SolidBrush sb = new SolidBrush(Color.FromArgb(16 - i * 2, 0, 0, 0))) g.FillPath(sb, sp);
+                }
+            }
             Bitmap b = Banner(gm, r.Size);
             using (GraphicsPath p = Ui.Round(r, rad))
             {
@@ -213,7 +222,7 @@ namespace Clutch
                 Rectangle vp = new Rectangle(r.Right - S(12) - vw, r.Y + S(12), vw, S(30));
                 Ui.FillRound(g, vp, S(15), C.Accent);
                 Ui.TextLeft(g, v, Ui.F(9, 5), new Rectangle(vp.X + S(14), vp.Y, vw, vp.Height), Color.White);
-                Ui.DrawIcon(g, "", 8, new Rectangle(vp.Right - S(24), vp.Y, S(16), vp.Height), Color.White);
+                Ui.DrawIcon(g, "\uE72A", 8, new Rectangle(vp.Right - S(24), vp.Y, S(16), vp.Height), Color.White);
             }
 
             Rectangle ic = new Rectangle(r.X + S(16), r.Bottom - S(16) - S(44), S(44), S(44));
@@ -223,7 +232,7 @@ namespace Clutch
             int tx = ic.Right + S(14), tw = r.Right - tx - S(16);
             Ui.TextLeft(g, gm.Name, Ui.F(13, 4), new Rectangle(tx, ic.Y - S(2), tw, S(26)), Color.White);
             string sub = gm.Clips == 0 ? (gm.AutoStart ? "Recording starts when it opens" : "No clips yet")
-                : (gm.Clips == 1 ? "1 clip" : gm.Clips + " clips") + "  ·  " + Footage(gm.Seconds) + "  ·  " + Library.NiceDate(gm.Last);
+                : (gm.Clips == 1 ? "1 clip" : gm.Clips + " clips") + "  \u00B7  " + Footage(gm.Seconds) + "  \u00B7  " + Library.NiceDate(gm.Last);
             Ui.TextLeft(g, sub, Ui.F(9, 0), new Rectangle(tx, ic.Y + S(24), tw, S(20)), Color.FromArgb(200, 255, 255, 255));
         }
 

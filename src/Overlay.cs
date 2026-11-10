@@ -7,17 +7,49 @@ using System.Windows.Forms;
 
 namespace Clutch
 {
+    static class NoticeSpot
+    {
+        public const int Right = 0, Left = 1, Top = 2, Bottom = 3;
+        public static int Margin { get { return Ui.S(20); } }
+
+        public static Point Place(Rectangle screen, Size card, int side, double along)
+        {
+            int m = Margin;
+            along = Math.Max(0, Math.Min(1, along));
+            if (side == Top || side == Bottom)
+            {
+                int x = screen.Left + m + (int)Math.Round(Math.Max(0, screen.Width - card.Width - m * 2) * along);
+                return new Point(x, side == Top ? screen.Top + m : screen.Bottom - m - card.Height);
+            }
+            int y = screen.Top + m + (int)Math.Round(Math.Max(0, screen.Height - card.Height - m * 2) * along);
+            return new Point(side == Left ? screen.Left + m : screen.Right - m - card.Width, y);
+        }
+
+        public static Point Offset(int side, int d)
+        {
+            return side == Left ? new Point(-d, 0) : side == Top ? new Point(0, -d) : side == Bottom ? new Point(0, d) : new Point(d, 0);
+        }
+
+        public static string Describe(int side, double along)
+        {
+            if (side == Top || side == Bottom)
+                return (side == Top ? "Top" : "Bottom") + " of the screen, " + (along < 0.2 ? "on the left" : along > 0.8 ? "on the right" : along < 0.4 ? "left of centre" : along > 0.6 ? "right of centre" : "in the middle");
+            return (side == Left ? "Left" : "Right") + " edge, " + (along < 0.2 ? "near the top" : along > 0.8 ? "near the bottom" : along < 0.4 ? "in the upper half" : along > 0.6 ? "in the lower half" : "in the middle");
+        }
+    }
+
     class SavedOverlay : Form
     {
         static SavedOverlay current;
         public static Form Current { get { return current; } }
         readonly Timer timer = new Timer();
         Bitmap card; IntPtr cardBits; Rectangle screen;
-        int phase;
+        int phase, side; double along;
         DateTime phaseStart;
-        const int InMs = 260, HoldMs = 2600, OutMs = 220;
+        const int InMs = 280, HoldMs = 2600, OutMs = 220;
         int hold = HoldMs;
         static int S(float v) { return Ui.S(v); }
+        static int Pad { get { return S(22); } }
 
         public SavedOverlay()
         {
@@ -53,11 +85,12 @@ namespace Clutch
         void Show(string title, string detail, bool ok, Rectangle scr, int holdMs)
         {
             bool showing = phase == 1 || phase == 2;
-            bool wasLeft = left;
-            screen = scr; left = Settings.Cur.OverlaySide == 1; yFrac = Math.Max(0, Math.Min(1, Settings.Cur.OverlayY));
-            if (wasLeft != left) showing = false;
+            int was = side;
+            screen = scr; side = Settings.Cur.OverlaySide;
+            along = side == NoticeSpot.Top || side == NoticeSpot.Bottom ? Settings.Cur.OverlayX : Settings.Cur.OverlayY;
+            if (was != side) showing = false;
             hold = holdMs > 0 ? holdMs : HoldMs;
-            Draw(title, detail, ok, holdMs > 0);
+            FreeCard(); card = Render(title, detail, ok, holdMs > 0); cardBits = card.GetHbitmap(Color.FromArgb(0));
             if (!IsHandleCreated) CreateHandle();
             if (showing && phase == 2) { phaseStart = DateTime.Now; Place(1); }
             else { phase = 1; phaseStart = DateTime.Now; Place(0); }
@@ -79,89 +112,89 @@ namespace Clutch
             else if (phase == 3)
             {
                 double p = Math.Min(1, t / OutMs);
-                Place(1 - p * p * p);
+                Place(1 - p * p);
                 if (p >= 1) { phase = 0; timer.Stop(); Native.ShowWindow(Handle, 0); FreeCard(); }
             }
         }
 
+        Point Final { get { Point v = NoticeSpot.Place(screen, new Size(card.Width - Pad * 2, card.Height - Pad * 2), side, along); return new Point(v.X - Pad, v.Y - Pad); } }
+
         void Place(double amount)
         {
             if (card == null) return;
-            int visible = Math.Max(1, (int)Math.Round(card.Width * amount));
-            Native.POINT dst = new Native.POINT(left ? screen.Left : screen.Right - visible, CardTop), src = new Native.POINT(left ? card.Width - visible : 0, 0);
-            Native.SIZE size = new Native.SIZE(visible, card.Height);
-            Native.BLENDFUNCTION blend = new Native.BLENDFUNCTION(); blend.Alpha = 255; blend.Format = 1;
+            Point f = Final, off = NoticeSpot.Offset(side, S(36));
+            double back = 1 - amount;
+            Native.POINT dst = new Native.POINT(f.X + (int)Math.Round(off.X * back), f.Y + (int)Math.Round(off.Y * back)), src = new Native.POINT(0, 0);
+            Native.SIZE size = new Native.SIZE(card.Width, card.Height);
+            Native.BLENDFUNCTION blend = new Native.BLENDFUNCTION(); blend.Alpha = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(255 * amount))); blend.Format = 1;
             IntPtr screenDc = Native.GetDC(IntPtr.Zero), memDc = Native.CreateCompatibleDC(screenDc);
             IntPtr old = Native.SelectObject(memDc, cardBits);
             Native.UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, memDc, ref src, 0, ref blend, 2);
             Native.SelectObject(memDc, old); Native.DeleteDC(memDc); Native.ReleaseDC(IntPtr.Zero, screenDc);
         }
 
-        void Draw(string title, string detail, bool ok, bool wrap)
+        public static Bitmap Render(string title, string detail, bool ok, bool wrap)
         {
-            FreeCard();
-            int h = S(70), logo = S(42), pad = S(16), tx = pad + logo + S(14), dh = S(22);
+            int pad = Pad, h = S(74), icon = S(46), inner = S(14), tx = inner + icon + S(14), dh = S(22);
             using (Font ft = new Font(Ui.BoldFont, 13.5f * Ui.Scale, FontStyle.Bold, GraphicsUnit.Point))
             using (Font fd = new Font(Ui.TextFont, 9.5f * Ui.Scale, FontStyle.Regular, GraphicsUnit.Point))
             {
-                int tw, w;
+                int w;
                 using (Bitmap probe = new Bitmap(1, 1)) using (Graphics pg = Graphics.FromImage(probe))
                 {
-                    tw = (int)Math.Ceiling(Math.Max(pg.MeasureString(title, ft).Width, pg.MeasureString(detail, fd).Width));
-                    w = Math.Min(S(wrap ? 460 : 420), Math.Max(S(230), tx + tw + S(28)));
+                    int tw = (int)Math.Ceiling(Math.Max(pg.MeasureString(title, ft).Width, pg.MeasureString(detail, fd).Width));
+                    w = Math.Min(S(wrap ? 460 : 420), Math.Max(S(250), tx + tw + S(26)));
                     if (wrap)
                     {
-                        dh = (int)Math.Ceiling(Math.Min(pg.MeasureString(detail, fd, w - tx - S(16)).Height, fd.GetHeight(pg) * 4 + 2));
-                        h = Math.Max(S(70), S(14) + S(30) + dh + S(14));
+                        dh = (int)Math.Ceiling(Math.Min(pg.MeasureString(detail, fd, w - tx - S(18)).Height, fd.GetHeight(pg) * 4 + 2));
+                        h = Math.Max(S(74), S(16) + S(30) + dh + S(16));
                     }
                 }
-                card = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
-                using (Graphics g = Graphics.FromImage(card))
+                Bitmap bmp = new Bitmap(w + pad * 2, h + pad * 2, PixelFormat.Format32bppPArgb);
+                using (Graphics g = Graphics.FromImage(bmp))
                 {
                     g.SmoothingMode = SmoothingMode.AntiAlias; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit; g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     g.Clear(Color.Transparent);
-                    using (GraphicsPath p = LeftRounded(new RectangleF(0, 0, w + S(20), h), S(16)))
-                    using (SolidBrush b = new SolidBrush(Color.FromArgb(246, 20, 20, 22)))
+                    float rad = S(18);
+                    for (int i = 0; i < 9; i++)
                     {
-                        if (left) using (Matrix mirror = new Matrix(-1, 0, 0, 1, w, 0)) p.Transform(mirror);
-                        g.FillPath(b, p);
+                        float grow = pad * (i + 1) / 10f;
+                        RectangleF sr = new RectangleF(pad - grow, pad - grow + S(5), w + grow * 2, h + grow * 2);
+                        using (GraphicsPath sp = Ui.Round(sr, rad + grow)) using (SolidBrush sb = new SolidBrush(Color.FromArgb(9 - i, 0, 0, 0))) g.FillPath(sb, sp);
                     }
-                    Rectangle lr = new Rectangle(pad, (h - logo) / 2, logo, logo);
-                    if (ok && Ui.Logo != null) g.DrawImage(Ui.Logo, lr);
-                    else Ui.DrawIcon(g, ok ? Glyph.Check : Glyph.Warning, 18, lr, ok ? C.AccentHi : C.Warn);
+                    RectangleF cr = new RectangleF(pad, pad, w, h);
+                    using (GraphicsPath p = Ui.Round(cr, rad))
+                    {
+                        using (LinearGradientBrush lg = new LinearGradientBrush(cr, Color.FromArgb(250, 32, 28, 48), Color.FromArgb(250, 20, 18, 30), 90f)) g.FillPath(lg, p);
+                        Region keep = g.Clip; g.SetClip(p, CombineMode.Intersect);
+                        RectangleF glow = new RectangleF(pad - S(30), pad - S(40), S(150), h + S(80));
+                        using (GraphicsPath gp = new GraphicsPath())
+                        {
+                            gp.AddEllipse(glow);
+                            using (PathGradientBrush pb = new PathGradientBrush(gp)) { pb.CenterColor = Color.FromArgb(ok ? 70 : 50, ok ? C.Accent : C.Warn); pb.SurroundColors = new[] { Color.FromArgb(0, C.Accent) }; g.FillPath(pb, gp); }
+                        }
+                        g.Clip = keep;
+                        using (Pen edge = new Pen(Color.FromArgb(40, 255, 255, 255), 1)) g.DrawPath(edge, p);
+                    }
+                    Rectangle ir = new Rectangle(pad + inner, pad + (h - icon) / 2, icon, icon);
+                    using (GraphicsPath ip = Ui.Round(ir, S(12)))
+                    using (LinearGradientBrush ib = new LinearGradientBrush(ir, ok ? C.AccentHi : C.Warn, ok ? C.Accent : Color.FromArgb(200, 120, 30), 45f)) g.FillPath(ib, ip);
+                    if (ok) Ui.DrawIcon(g, Glyph.Check, 16, ir, Color.White);
+                    else Ui.DrawIcon(g, Glyph.Warning, 15, ir, Color.White);
                     StringFormat sf = new StringFormat(StringFormatFlags.NoWrap); sf.Trimming = StringTrimming.EllipsisCharacter;
                     StringFormat wf = new StringFormat(); wf.Trimming = StringTrimming.EllipsisWord;
-                    float ty = wrap ? (h - S(30) - dh) / 2f : h / 2f - S(27);
+                    float ty = wrap ? pad + (h - S(30) - dh) / 2f : pad + h / 2f - S(27);
                     using (SolidBrush b = new SolidBrush(Color.White))
-                        g.DrawString(title, ft, b, new RectangleF(tx, ty, w - tx - S(12), S(30)), sf);
-                    using (SolidBrush b = new SolidBrush(Color.FromArgb(225, 225, 230)))
-                        g.DrawString(detail, fd, b, new RectangleF(tx, wrap ? ty + S(30) : h / 2f + S(3), w - tx - S(16), dh), wrap ? wf : sf);
+                        g.DrawString(title, ft, b, new RectangleF(pad + tx, ty, w - tx - S(14), S(30)), sf);
+                    using (SolidBrush b = new SolidBrush(Color.FromArgb(205, 200, 222)))
+                        g.DrawString(detail, fd, b, new RectangleF(pad + tx, wrap ? ty + S(30) : pad + h / 2f + S(3), w - tx - S(18), dh), wrap ? wf : sf);
                 }
-            }
-            cardBits = card.GetHbitmap(Color.FromArgb(0));
-        }
-
-        static GraphicsPath LeftRounded(RectangleF r, float rad)
-        {
-            GraphicsPath p = new GraphicsPath(); float d = rad * 2;
-            p.AddLine(r.Right, r.Top, r.Left + rad, r.Top);
-            p.AddArc(r.Left, r.Top, d, d, 270, -90);
-            p.AddLine(r.Left, r.Top + rad, r.Left, r.Bottom - rad);
-            p.AddArc(r.Left, r.Bottom - d, d, d, 180, -90);
-            p.AddLine(r.Left + rad, r.Bottom, r.Right, r.Bottom);
-            return p;
-        }
-
-        public static Bitmap Sample(bool onLeft)
-        {
-            using (SavedOverlay o = new SavedOverlay())
-            {
-                o.left = onLeft;
-                o.Draw("Clipped!", "Clipped Counter-Strike 2  \u00B7  60s", true, false);
-                return new Bitmap(o.card);
+                return bmp;
             }
         }
+
+        public static Bitmap Sample() { return Render("Clipped!", "Clipped Counter-Strike 2  \u00B7  60s", true, false); }
 
         void FreeCard()
         {
@@ -169,11 +202,8 @@ namespace Clutch
             if (card != null) { card.Dispose(); card = null; }
         }
 
-        bool left; double yFrac;
-        int CardTop { get { int m = S(28); return screen.Top + m + (int)Math.Round(Math.Max(0, screen.Height - card.Height - m * 2) * yFrac); } }
-
 #if DEV
-        public Rectangle ShotRect { get { return card == null ? Rectangle.Empty : new Rectangle(left ? screen.Left : screen.Right - card.Width, CardTop, card.Width, card.Height); } }
+        public Rectangle ShotRect { get { if (card == null) return Rectangle.Empty; Point f = Final; return new Rectangle(f.X, f.Y, card.Width, card.Height); } }
 #endif
 
         protected override void Dispose(bool disposing) { if (disposing) { timer.Dispose(); FreeCard(); } base.Dispose(disposing); }
@@ -181,19 +211,21 @@ namespace Clutch
 
     class OverlayEditor : Form
     {
-        Bitmap backdrop, cardL, cardR;
+        Bitmap backdrop, sample;
         readonly Rectangle screen;
-        bool left; double y; bool drag; int grabDy;
+        int side; double along; bool drag; Point grab;
         readonly Btn save = new Btn("Save", "", BtnStyle.Accent), cancel = new Btn("Cancel", "", BtnStyle.Standard);
         public bool Saved;
 #if DEV
         public static bool NoBackdrop;
 #endif
         static int S(float v) { return Ui.S(v); }
+        static int Pad { get { return S(22); } }
 
         public OverlayEditor(Rectangle scr)
         {
-            screen = scr; left = Settings.Cur.OverlaySide == 1; y = Settings.Cur.OverlayY;
+            screen = scr; side = Settings.Cur.OverlaySide;
+            along = side == NoticeSpot.Top || side == NoticeSpot.Bottom ? Settings.Cur.OverlayX : Settings.Cur.OverlayY;
             FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; Bounds = scr; TopMost = true; ShowInTaskbar = false;
             BackColor = Color.Black; DoubleBuffered = true; KeyPreview = true; Cursor = Cursors.Default;
             try
@@ -209,15 +241,22 @@ namespace Clutch
                 }
             }
             catch { backdrop = null; }
-            cardL = SavedOverlay.Sample(true); cardR = SavedOverlay.Sample(false);
-            save.Click += delegate { Settings.Cur.OverlaySide = left ? 1 : 0; Settings.Cur.OverlayY = Math.Round(y, 3); Settings.Save(); Saved = true; Close(); };
+            sample = SavedOverlay.Sample();
+            save.Click += delegate
+            {
+                Settings.Cur.OverlaySide = side;
+                if (side == NoticeSpot.Top || side == NoticeSpot.Bottom) Settings.Cur.OverlayX = Math.Round(along, 3); else Settings.Cur.OverlayY = Math.Round(along, 3);
+                Settings.Save(); Saved = true; Close();
+            };
             cancel.Click += delegate { Close(); };
             KeyDown += delegate (object s, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Escape) Close();
                 else if (e.KeyCode == Keys.Enter) save.PerformClick();
-                else if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) { y = Math.Max(0, Math.Min(1, y + (e.KeyCode == Keys.Up ? -0.02 : 0.02))); Invalidate(); }
-                else if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) { left = e.KeyCode == Keys.Left; Invalidate(); }
+                else if (e.KeyCode == Keys.Up) { side = NoticeSpot.Top; along = 0.5; Invalidate(); }
+                else if (e.KeyCode == Keys.Down) { side = NoticeSpot.Bottom; along = 0.5; Invalidate(); }
+                else if (e.KeyCode == Keys.Left) { side = NoticeSpot.Left; along = 0.1; Invalidate(); }
+                else if (e.KeyCode == Keys.Right) { side = NoticeSpot.Right; along = 0.1; Invalidate(); }
             };
             Controls.Add(save); Controls.Add(cancel);
             int bw = S(110), bh = S(40), cx = scr.Width / 2;
@@ -225,16 +264,14 @@ namespace Clutch
             foreach (Btn b in new[] { save, cancel }) b.BackColor = Color.FromArgb(20, 19, 28);
         }
 
-        Bitmap Card { get { return left ? cardL : cardR; } }
-        int Margin_ { get { return S(28); } }
+        Size CardSize { get { return new Size(sample.Width - Pad * 2, sample.Height - Pad * 2); } }
 
         Rectangle CardRect
         {
             get
             {
-                Bitmap c = Card; int m = Margin_;
-                int top = m + (int)Math.Round(Math.Max(0, screen.Height - c.Height - m * 2) * y);
-                return new Rectangle(left ? 0 : screen.Width - c.Width, top, c.Width, c.Height);
+                Point v = NoticeSpot.Place(new Rectangle(0, 0, screen.Width, screen.Height), CardSize, side, along);
+                return new Rectangle(v, CardSize);
             }
         }
 
@@ -243,7 +280,7 @@ namespace Clutch
             base.OnMouseDown(e);
             if (e.Button != MouseButtons.Left) return;
             Rectangle r = CardRect;
-            drag = true; grabDy = r.Contains(e.Location) ? e.Y - r.Y : r.Height / 2;
+            drag = true; grab = r.Contains(e.Location) ? new Point(e.X - r.X, e.Y - r.Y) : new Point(r.Width / 2, r.Height / 2);
             MoveTo(e.Location);
         }
 
@@ -258,33 +295,42 @@ namespace Clutch
 
         void MoveTo(Point p)
         {
-            int m = Margin_, h = Card.Height;
-            left = p.X < screen.Width / 2;
-            y = Math.Max(0, Math.Min(1, (p.Y - grabDy - m) / (double)Math.Max(1, screen.Height - h - m * 2)));
+            Size c = CardSize; int m = NoticeSpot.Margin;
+            int x = p.X - grab.X, y = p.Y - grab.Y, cx = x + c.Width / 2, cy = y + c.Height / 2;
+            double dl = cx / (double)screen.Width, dr = 1 - dl, dt = cy / (double)screen.Height, db = 1 - dt;
+            double best = Math.Min(Math.Min(dl, dr), Math.Min(dt, db));
+            side = best == dt ? NoticeSpot.Top : best == db ? NoticeSpot.Bottom : best == dl ? NoticeSpot.Left : NoticeSpot.Right;
+            if (side == NoticeSpot.Top || side == NoticeSpot.Bottom) along = Math.Max(0, Math.Min(1, (x - m) / (double)Math.Max(1, screen.Width - c.Width - m * 2)));
+            else along = Math.Max(0, Math.Min(1, (y - m) / (double)Math.Max(1, screen.Height - c.Height - m * 2)));
             Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
+            Graphics g = e.Graphics; Ui.Prep(g);
             if (backdrop != null) g.DrawImageUnscaled(backdrop, 0, 0); else g.Clear(Color.FromArgb(14, 13, 20));
-            Rectangle r = CardRect;
-            using (Pen guide = new Pen(Color.FromArgb(90, 255, 255, 255), 1) { DashStyle = DashStyle.Dash })
+            int m = NoticeSpot.Margin / 2;
+            using (Pen guide = new Pen(Color.FromArgb(60, 255, 255, 255), 1) { DashStyle = DashStyle.Dash })
+                g.DrawRectangle(guide, m, m, screen.Width - m * 2 - 1, screen.Height - m * 2 - 1);
+            using (Pen on = new Pen(Color.FromArgb(220, C.AccentHi), S(3)))
             {
-                int gx = left ? S(2) : screen.Width - S(3);
-                g.DrawLine(guide, gx, Margin_, gx, screen.Height - Margin_);
+                if (side == NoticeSpot.Top) g.DrawLine(on, m, m, screen.Width - m, m);
+                else if (side == NoticeSpot.Bottom) g.DrawLine(on, m, screen.Height - m, screen.Width - m, screen.Height - m);
+                else if (side == NoticeSpot.Left) g.DrawLine(on, m, m, m, screen.Height - m);
+                else g.DrawLine(on, screen.Width - m, m, screen.Width - m, screen.Height - m);
             }
-            g.DrawImageUnscaled(Card, r.X, r.Y);
+            Rectangle r = CardRect;
+            g.DrawImageUnscaled(sample, r.X - Pad, r.Y - Pad);
             Rectangle tr = new Rectangle(0, screen.Height / 2 - S(60), screen.Width, S(34));
             Ui.TextCenter(g, "Drag the notice to where you want it", Ui.F(16, 4), tr, Color.White);
-            Ui.TextCenter(g, "Either side of the screen, any height. Arrow keys work too. Enter saves, Esc cancels.", Ui.F(10, 0), new Rectangle(0, tr.Bottom + S(4), screen.Width, S(24)), Color.FromArgb(205, 205, 215));
+            Ui.TextCenter(g, "Any edge of the screen: left, right, top or bottom. Arrow keys pick an edge. Enter saves, Esc cancels.", Ui.F(10, 0), new Rectangle(0, tr.Bottom + S(4), screen.Width, S(24)), Color.FromArgb(205, 205, 215));
         }
 
         protected override void OnShown(EventArgs e) { base.OnShown(e); Activate(); }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { if (backdrop != null) backdrop.Dispose(); if (cardL != null) cardL.Dispose(); if (cardR != null) cardR.Dispose(); }
+            if (disposing) { if (backdrop != null) backdrop.Dispose(); if (sample != null) sample.Dispose(); }
             base.Dispose(disposing);
         }
     }

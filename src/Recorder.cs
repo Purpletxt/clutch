@@ -54,6 +54,22 @@ namespace Clutch
         static readonly System.Text.StringBuilder errTail = new System.Text.StringBuilder();
 
         public static long BytesHeld { get { return bytesHeld; } }
+        public static bool Struggling { get { return Now == State.Recording && badWindows >= 2; } }
+        public static string HealthNote = "";
+        static int frameCount, badWindows; static double windowStart;
+        static void CountFrame(double arrival, long pts)
+        {
+            if (windowStart == 0 || arrival < windowStart) { windowStart = arrival; frameCount = 0; return; }
+            frameCount++;
+            double span = arrival - windowStart;
+            if (span < 5) return;
+            double rate = frameCount / span, lag = arrival - pts / 90000.0 - minOffset;
+            bool slow = (DateTime.Now - launchedAt).TotalSeconds > 8 && (rate < fps * 0.8 || lag > 1.5);
+            badWindows = slow ? Math.Min(badWindows + 1, 9) : 0;
+            HealthNote = !slow ? "" : lag > 1.5 ? "The encoder is falling behind, so clips may stutter. Try a lower quality, 30 fps or 1080p."
+                : "Recording at about " + Math.Round(rate) + " of " + fps + " fps, so clips may stutter. Try 30 fps or a lower quality.";
+            windowStart = arrival; frameCount = 0;
+        }
         public static double SecondsHeld
         {
             get { lock (gate) return chunks.Count == 0 || lastPts < 0 ? 0 : (lastPts - chunks[0].Pts) / 90000.0; }
@@ -143,7 +159,7 @@ namespace Clutch
             string args = "-hide_banner -loglevel error -nostats -f lavfi -i ddagrab=output_idx=" + mon + region + ":framerate=" + fps + ":draw_mouse=1 "
                         + Encoder.Args(parts[0], parts.Length > 1 && parts[1] == "1", fps, kbps, outSize)
                         + " -flags +global_header -bsf:v dump_extra=freq=keyframe -an -f mpegts -mpegts_start_pid 256 -mpegts_pmt_start_pid 4096 -muxdelay 0 -muxpreload 0 -flush_packets 1 pipe:1";
-            lock (gate) { foreach (Chunk c in chunks) Recycle(c); chunks.Clear(); bytesHeld = 0; lastPts = -1; wrapAdd = 0; minOffset = double.MaxValue; pat = pmt = null; }
+            lock (gate) { foreach (Chunk c in chunks) Recycle(c); chunks.Clear(); bytesHeld = 0; lastPts = -1; wrapAdd = 0; minOffset = double.MaxValue; windowStart = 0; badWindows = 0; HealthNote = ""; pat = pmt = null; }
             lock (errTail) errTail.Length = 0;
 
             Process p = new Process();
@@ -305,6 +321,7 @@ namespace Clutch
                     if (lastPts >= 0 && pts < lastPts - (1L << 32)) { wrapAdd += 1L << 33; pts += 1L << 33; }
                     double off = arrival - pts / 90000.0;
                     if (off < minOffset) minOffset = off;
+                    CountFrame(arrival, pts);
                     if (rai)
                     {
                         lock (gate)

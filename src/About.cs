@@ -33,6 +33,10 @@ namespace Clutch
 "and kept in %LOCALAPPDATA%\\Clutch\\ffmpeg. Clutch runs it as a separate program and doesn't change it.\n\n" +
 "This FFmpeg build is licensed under the GNU General Public License, version 3 (GPLv3). Its source code is available from ffmpeg.org, " +
 "and the build's configuration from gyan.dev. FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.\n\n" +
+"Voice add-on (optional)\n" +
+"If you download it, voice clips use Vosk 0.3.45 and its small English model by Alpha Cephei, licensed under the Apache License 2.0 (github.com/alphacep/vosk-api), " +
+"with MinGW runtime libraries under the GCC runtime library exception. It's checked against SHA-256 checksums built into Clutch and kept in %LOCALAPPDATA%\\Clutch\\voice. " +
+"Without it, voice clips use Windows' built-in speech recognition.\n\n" +
 "Game art and Discord\n" +
 "Game icons come from Discord's public list of detectable games; banners from Steam and the Microsoft Store. They belong to their owners. " +
 "Clutch isn't affiliated with or endorsed by Discord, Valve, Microsoft or any game publisher.\n\n";

@@ -14,6 +14,20 @@ namespace Clutch
     [StructLayout(LayoutKind.Sequential)]
     struct MfSize { public int W, H; }
 
+    [ComImport, Guid("90EB3E6B-ECBF-45cc-B1DA-C6FE3EA70D57"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMFPMediaItem
+    {
+        [PreserveSig] int GetMediaPlayer(out IntPtr player);
+        [PreserveSig] int GetURL(out IntPtr url);
+        [PreserveSig] int GetObject(out IntPtr obj);
+        [PreserveSig] int GetUserData(out IntPtr data);
+        [PreserveSig] int SetUserData(IntPtr data);
+        [PreserveSig] int GetStartStopPosition(IntPtr a, IntPtr b, IntPtr c, IntPtr d);
+        [PreserveSig] int SetStartStopPosition(IntPtr a, IntPtr b, IntPtr c, IntPtr d);
+        [PreserveSig] int HasVideo(out int has, out int selected);
+        [PreserveSig] int HasAudio(out int has, out int selected);
+    }
+
     [ComImport, Guid("A714590A-58AF-430a-85BF-44F5EC838D85"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IMFPMediaPlayer
     {
@@ -109,6 +123,18 @@ namespace Clutch
         public float Rate { set { if (p != null) p.SetRate(value); } }
 
         public Size VideoSize { get { MfSize s, a; return p != null && p.GetNativeVideoSize(out s, out a) >= 0 ? new Size(s.W, s.H) : Size.Empty; } }
+
+        public int Audio
+        {
+            get
+            {
+                if (p == null) return -1;
+                IntPtr item; if (p.GetMediaItem(out item) < 0 || item == IntPtr.Zero) return -1;
+                try { IMFPMediaItem mi = (IMFPMediaItem)Marshal.GetObjectForIUnknown(item); int has, sel; int hr = mi.HasAudio(out has, out sel); Marshal.ReleaseComObject(mi); return hr < 0 ? -1 : has == 0 ? 0 : sel == 0 ? 1 : 2; }
+                catch { return -1; }
+                finally { Marshal.Release(item); }
+            }
+        }
 
         public void Dispose()
         {
@@ -397,9 +423,11 @@ namespace Clutch
 
         public static double DefaultAspect() { Rectangle b = Recorder.MonitorBounds(Settings.Cur.Monitor); return b.Height > 0 ? (double)b.Width / b.Height : 16 / 9.0; }
 
+        public int AudioState { get { return mf != null ? mf.Audio : -1; } }
+
         public string Diagnostics()
         {
-            if (mf != null) { Size z = mf.VideoSize; return "engine=MediaFoundation state=" + mf.State + " size=" + z.Width + "x" + z.Height + " len=" + mf.Duration.ToString("0.00"); }
+            if (mf != null) { Size z = mf.VideoSize; return "engine=MediaFoundation state=" + mf.State + " size=" + z.Width + "x" + z.Height + " len=" + mf.Duration.ToString("0.00") + " audio=" + new[] { "unknown", "none", "found but off", "playing" }[mf.Audio + 1]; }
             try { dynamic p = host.P; return "engine=WMP state=" + (int)p.playState + " size=" + (int)p.currentMedia.imageSourceWidth + "x" + (int)p.currentMedia.imageSourceHeight; }
             catch (Exception ex) { return "diag failed: " + ex.Message; }
         }

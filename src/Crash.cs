@@ -56,6 +56,7 @@ namespace Clutch
             b.AppendLine("FFmpeg: " + (FFmpeg.Ready ? FFmpeg.Version : "not installed"));
             b.AppendLine("Recording: " + s.Fps + " fps, " + new[] { "low", "standard", "high" }[Math.Max(0, Math.Min(2, s.Quality))] + " quality, " + new[] { "native", "1080p", "720p" }[Math.Max(0, Math.Min(2, s.Resolution))] + ", " + s.BufferSeconds + " s buffer, " + (s.Enabled ? "on" : "off") + (s.GamesOnly ? ", games only" : ""));
             b.AppendLine("Audio: desktop " + (s.DesktopAudio ? "on" : "off") + ", mic " + (s.Mic ? "on" : "off"));
+            b.AppendLine(Safe(AudioDetails));
             b.AppendLine("Memory: " + (Process.GetCurrentProcess().WorkingSet64 >> 20) + " MB, up " + (int)(DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMinutes + " min");
             b.AppendLine();
             if (ex != null)
@@ -71,6 +72,29 @@ namespace Clutch
         }
 
         static string Safe(Func<string> f) { try { return f(); } catch { return "unknown"; } }
+
+        static string AudioDetails()
+        {
+            StringBuilder b = new StringBuilder();
+            Func<AudioSource, string> state = delegate (AudioSource a) { return (a.Running ? "running" : "off") + (a.DeviceName.Length > 0 ? " on " + a.DeviceName : "") + ", level " + a.Level.ToString("0.000") + (a.Error.Length > 0 ? ", error: " + a.Error : ""); };
+            b.AppendLine("Audio devices: " + AudioDevices.List(0).Count + " outputs, " + AudioDevices.List(1).Count + " inputs");
+            b.AppendLine("Desktop audio: " + state(Recorder.Desktop));
+            b.AppendLine("Mic: " + state(Recorder.Mic));
+            b.AppendLine("Game audio: " + (ProcessLoopback.Supported ? "supported" : "not supported") + ", " + (Settings.Cur.SplitGameAudio ? "on" : "off") + ", game " + state(Recorder.Game) + ", other apps " + state(Recorder.Other) + ", game pid " + Games.RunningPid);
+            MainForm m = Program.Main_;
+            if (m != null)
+            {
+                b.AppendLine("Player (viewer): " + Safe(delegate { return m.Viewer.Video.Diagnostics() + ", volume " + m.Viewer.Video.Volume; }));
+                b.AppendLine("Player (trim): " + Safe(delegate { return m.Trim.Video.Diagnostics() + ", volume " + m.Trim.Video.Volume; }));
+            }
+            if (Library.Clips.Count > 0)
+            {
+                Clip c = Library.Clips[0];
+                List<string> t = FFmpeg.AudioTracks(c.Path);
+                b.Append("Newest clip tracks: " + (t.Count > 0 ? string.Join(", ", t.ToArray()) : "none found (" + FFmpeg.LastProbeError + ")"));
+            }
+            return b.ToString();
+        }
 
         static string WindowsName()
         {

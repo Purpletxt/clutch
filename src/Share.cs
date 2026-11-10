@@ -1156,4 +1156,48 @@ namespace Clutch
             }
         }
     }
+
+    class SearchSuggest : Ctl
+    {
+        readonly MainForm main;
+        List<SettingsPage.Hit> hits = new List<SettingsPage.Hit>();
+        int hot = -1;
+        int RowH { get { return S(42); } }
+        public SearchSuggest(MainForm m) { main = m; Visible = false; Cursor = Cursors.Hand; BackColor = C.Bg; }
+
+        public void Show(List<SettingsPage.Hit> found, Rectangle under)
+        {
+            hits = found; hot = -1;
+            if (hits.Count == 0) { Visible = false; return; }
+            SetBounds(under.X, under.Bottom + S(6), under.Width, S(34) + hits.Count * RowH + S(8));
+            Visible = true; BringToFront(); Invalidate();
+        }
+
+        int At(Point p) { int i = (p.Y - S(34)) / RowH; return p.Y >= S(34) && i >= 0 && i < hits.Count ? i : -1; }
+        protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); int h = At(e.Location); if (h != hot) { hot = h; Invalidate(); } }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hot = -1; Invalidate(); }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            int i = At(e.Location); if (i < 0 || e.Button != MouseButtons.Left) return;
+            SettingsPage.Hit h = hits[i];
+            Visible = false; main.Bar.ClearSearch(); main.Go(main.SettingsP); main.SettingsP.Reveal(h);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = Begin(e);
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
+            Ui.FillRound(g, r, S(12), C.CardHi); Ui.StrokeRound(g, r, S(12), C.ControlHi, 1);
+            Ui.TextLeft(g, "SETTINGS", Ui.F(8, 1), new Rectangle(S(16), S(6), Width - S(32), S(26)), C.Faint);
+            for (int i = 0; i < hits.Count; i++)
+            {
+                Rectangle row = new Rectangle(S(6), S(34) + i * RowH, Width - S(12), RowH);
+                if (i == hot) Ui.FillRound(g, row, S(8), C.Control);
+                Ui.DrawIcon(g, Glyph.Settings, 11, new Rectangle(row.X + S(8), row.Y, S(24), row.Height), C.Sub);
+                Ui.TextLeft(g, hits[i].Title, Ui.F(10, 1), new Rectangle(row.X + S(40), row.Y, row.Width - S(160), row.Height), C.Text);
+                Ui.TextRight(g, hits[i].Where, Ui.F(9, 0), new Rectangle(row.Right - S(130), row.Y, S(118), row.Height), C.Faint);
+            }
+        }
+    }
 }

@@ -20,7 +20,16 @@ namespace Clutch
         public const long ZipSize = 91406388;
         public const string Source = "gyan.dev";
 
-        public static string Dir { get { return Path.Combine(Paths.Local, "ffmpeg"); } }
+        public static string Dir
+        {
+            get
+            {
+#if DEV
+                string o = Environment.GetEnvironmentVariable("CLUTCH_FFMPEG_DIR"); if (!string.IsNullOrEmpty(o)) return o;
+#endif
+                return Path.Combine(Paths.Local, "ffmpeg");
+            }
+        }
         public static string Exe { get { return Path.Combine(Dir, "ffmpeg.exe"); } }
         public static string ProbeExe { get { return Path.Combine(Dir, "ffprobe.exe"); } }
         public static bool Ready { get { return File.Exists(Exe) && File.Exists(ProbeExe) && Version == PinnedVersion; } }
@@ -144,16 +153,21 @@ namespace Clutch
             double d; return double.TryParse(r.Out.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : 0;
         }
 
+        public static string LastProbeError = "";
         public static List<string> AudioTracks(string file)
         {
             List<string> list = new List<string>();
-            if (!Ready) return list;
-            Result r = Run(ProbeExe, "-v error -select_streams a -show_entries stream=index:stream_tags=handler_name -of csv=p=0 " + Q(file), 15000, null);
+            if (!Ready) { LastProbeError = "FFmpeg isn't ready"; return list; }
+            Result r;
+            try { r = Run(ProbeExe, "-v error -select_streams a -show_entries stream=index:stream_tags=handler_name -of csv=p=0 " + Q(file), 15000, null); }
+            catch (Exception ex) { LastProbeError = "ffprobe couldn't start: " + ex.Message; Log.Info("Audio tracks", LastProbeError); return list; }
             foreach (string line in r.Out.Split('\n'))
             {
                 string l = line.Trim(); if (l.Length == 0) continue;
                 int c = l.IndexOf(','); list.Add(c >= 0 ? l.Substring(c + 1) : "");
             }
+            LastProbeError = list.Count > 0 ? "" : "ffprobe exit " + r.Exit + (r.TimedOut ? " (timed out)" : "") + ": " + r.Err.Trim();
+            if (list.Count == 0 && (r.Exit != 0 || r.TimedOut)) Log.Info("Audio tracks", Path.GetFileName(file) + " - " + LastProbeError);
             return list;
         }
 

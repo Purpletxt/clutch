@@ -24,7 +24,7 @@ namespace Clutch
     static class AppInfo
     {
         public const string Name = "Clutch";
-        public const string Version = "1.0.9";
+        public const string Version = "1.0.10";
     }
 
     static class Program
@@ -33,7 +33,7 @@ namespace Clutch
         public static string ShotPage, ShotFile;
         public static bool Demo, StartHidden, SelfTesting, JustUpdated, PendingUninstall, InviteRevoked;
         public static Updater.Release PendingUpdate;
-        static MainForm Main_;
+        public static MainForm Main_;
 
         public static void HideTray() { try { if (Main_ != null) Main_.HideTray(); } catch { } }
 
@@ -175,6 +175,8 @@ namespace Clutch
         public bool Mic = false;
         public bool SplitGameAudio = true;
         public bool HoldClip = false;
+        public bool VoiceClips = false;
+        public string VoicePhrase = "Clutch, clip that";
         public double HoldSeconds = 0.5;
         public string MicDevice = "";
         public int MicVolume = 100;
@@ -182,6 +184,7 @@ namespace Clutch
         public bool SaveSound = true;
         public int OverlaySide = 0;
         public double OverlayY = 0;
+        public double OverlayX = 0.5;
         public bool Overlay = true;
         public bool CloseToTray = true;
         public bool TrayHintShown = false;
@@ -189,6 +192,7 @@ namespace Clutch
         public bool DiscordStatus = true;
         public int DiscordMB = 10;
         public bool DiscordSwitcher = true;
+        public bool HoverPreviews = true;
         public bool GameChips = true;
         public bool FoldClips = false;
         public bool FoldFavourites = false;
@@ -217,8 +221,9 @@ namespace Clutch
             if (Cur.BufferSeconds < 5) Cur.BufferSeconds = 60;
             if (Cur.BufferSeconds > 600) Cur.BufferSeconds = 600;
             if (Cur.Fps != 30 && Cur.Fps != 60) Cur.Fps = 60;
-            if (Cur.OverlaySide != 1) Cur.OverlaySide = 0;
+            if (Cur.OverlaySide < 0 || Cur.OverlaySide > 3) Cur.OverlaySide = 0;
             Cur.OverlayY = Math.Max(0, Math.Min(1, Cur.OverlayY));
+            Cur.OverlayX = Math.Max(0, Math.Min(1, Cur.OverlayX));
         }
 
         public static void Save()

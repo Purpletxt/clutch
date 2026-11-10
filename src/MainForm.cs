@@ -56,6 +56,7 @@ namespace Clutch
             Clips = new ClipsPage(this); GamesP = new GamesPage(this); Viewer = new ViewerPage(this); Trim = new TrimPage(this); SettingsP = new SettingsPage(this); Welcome = new WelcomePage(this);
             foreach (Page p in new Page[] { Clips, GamesP, Viewer, Trim, SettingsP, Welcome }) { p.Visible = false; Controls.Add(p); }
             Controls.Add(Toast);
+            Suggest = new SearchSuggest(this); Controls.Add(Suggest);
             Ui.ScaleChanged += delegate { Font = Ui.F(10, 0); PerformLayout(); foreach (Control c in Controls) { c.PerformLayout(); Page p = c as Page; if (p != null) p.Relayout(); } Invalidate(true); };
 
             Library.Attach(this);
@@ -147,7 +148,11 @@ namespace Clutch
         {
             if (text.Trim().Length > 0 && current != Clips) Go(Clips);
             Clips.Refresh();
+            Rectangle under = Bar.Search.Bounds; under.Offset(Bar.Left, Bar.Top);
+            Suggest.Show(SettingsP.Find(text), under);
         }
+
+        public SearchSuggest Suggest;
 
         protected override void WndProc(ref Message m)
         {
@@ -155,8 +160,45 @@ namespace Clutch
             if (m.Msg == SingleInstance.ShowMessage && m.Msg != 0) { ShowWindowNow(); return; }
             if (m.Msg == SingleInstance.QuitMessage && m.Msg != 0) { Quit(); return; }
             if (m.Msg == Native.WM_HOTKEY && m.WParam.ToInt32() == 1) { ClipKeyPressed(); return; }
+            if (m.Msg == 0x83 && m.WParam != IntPtr.Zero)
+            {
+                int top = System.Runtime.InteropServices.Marshal.ReadInt32(m.LParam, 4);
+                base.WndProc(ref m);
+                int pad = WindowState == FormWindowState.Maximized ? Native.GetSystemMetrics(33) + Native.GetSystemMetrics(92) : 0;
+                System.Runtime.InteropServices.Marshal.WriteInt32(m.LParam, 4, top + pad);
+                m.Result = IntPtr.Zero; return;
+            }
+            if (m.Msg == 0x84)
+            {
+                base.WndProc(ref m);
+                if (m.Result.ToInt32() == 1)
+                {
+                    long lp = m.LParam.ToInt64();
+                    m.Result = (IntPtr)CaptionHit(PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF))));
+                }
+                return;
+            }
+            if (m.Msg == 0xA1 && m.WParam.ToInt32() == 9) { m.Result = IntPtr.Zero; return; }
+            if (m.Msg == 0xA2 && m.WParam.ToInt32() == 9) { WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; m.Result = IntPtr.Zero; return; }
+            if (m.Msg == 0xA0) Bar.SetMaxHot(m.WParam.ToInt32() == 9);
+            if (m.Msg == 0x2A2) Bar.SetMaxHot(false);
             base.WndProc(ref m);
         }
+
+        int CaptionHit(Point p)
+        {
+            bool max = WindowState == FormWindowState.Maximized;
+            int edge = S(6);
+            if (!max && p.Y < edge) return p.X < edge * 2 ? 13 : p.X > ClientSize.Width - edge * 2 ? 14 : 12;
+            if (Bar == null) return 1;
+            Rectangle mr = Bar.MaxRect; mr.Offset(Bar.Left, Bar.Top);
+            if (mr.Contains(p)) return 9;
+            if (p.Y < Bar.Bottom && p.X >= Bar.Left) return 2;
+            if (Rail != null && p.X < Rail.Width && p.Y < S(64)) return 2;
+            return 1;
+        }
+
+        public void ToggleMaximize() { WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
@@ -264,6 +306,7 @@ namespace Clutch
         void StatusChanged()
         {
             Bar.Invalidate();
+            Voice.Sync(this);
             bool rec = Recorder.Now == Recorder.State.Recording;
             if (tray != null && !IsDisposed && !closing)
             {
@@ -478,6 +521,17 @@ namespace Clutch
         }
         public void CancelDownload() { cancelDownload = true; }
 
+        public void StartVoiceDownload()
+        {
+            VoiceAddon.Start(this, delegate
+            {
+                if (VoiceAddon.Error.Length == 0) Toast.Show(Glyph.Check, "Voice add-on installed. Voice clips now use it.", null, null, 4000);
+                else Toast.Show(Glyph.Warning, VoiceAddon.Error, null, null, 6000);
+                Voice.Sync(this); SettingsP.Tick(); Welcome.Invalidate(true);
+            });
+            SettingsP.Tick();
+        }
+
 #if DEV
         public ContextMenuStrip DevTrayMenu() { if (tray == null) MakeTray(); return tray.ContextMenuStrip; }
 #endif
@@ -560,7 +614,7 @@ namespace Clutch
             base.OnFormClosing(e);
             closing = true;
             DiscordPresence.Stop();
-            ClipKey.Stop();
+            ClipKey.Stop(); Voice.Stop();
             Recorder.Stop();
             Viewer.Video.Close(); Trim.Video.Close();
             Library.Flush(true);

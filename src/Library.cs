@@ -88,6 +88,7 @@ namespace Clutch
             Dictionary<string, ClipMeta> m = new Dictionary<string, ClipMeta>();
             foreach (Clip c in Clips) { ClipMeta x = new ClipMeta(); x.Game = c.Game; x.Favorite = c.Favorite; x.Duration = c.Duration; m[System.IO.Path.GetFileName(c.Path)] = x; }
             foreach (Pending p in pending) { ClipMeta x = new ClipMeta(); x.Game = p.Clip.Game; x.Favorite = p.Clip.Favorite; x.Duration = p.Clip.Duration; m[System.IO.Path.GetFileName(p.Clip.Path)] = x; }
+            foreach (KeyValuePair<string, ClipMeta> kv in m) meta[kv.Key] = kv.Value;
             try { File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(m), Encoding.UTF8); }
             catch (Exception ex) { Log.Error("Library.Save", ex); }
         }
@@ -130,6 +131,7 @@ namespace Clutch
                 {
                     if (File.Exists(c.Path)) File.Delete(c.Path);
                     try { string t = ThumbPath(c); if (File.Exists(t)) File.Delete(t); } catch { }
+                    HoverPreview.Forget(c);
                     Clips.Remove(c); total -= c.Size; freed += c.Size; count++;
                 }
                 catch (Exception ex) { Log.Info("Auto-clean", ex.Message); }
@@ -163,6 +165,7 @@ namespace Clutch
             {
                 File.Move(c.Path, newPath);
                 string oldThumb = ThumbPath(c);
+                HoverPreview.Forget(c);
                 c.Path = newPath;
                 try { if (File.Exists(oldThumb)) File.Move(oldThumb, ThumbPath(c)); } catch { }
             }
@@ -204,6 +207,7 @@ namespace Clutch
                     if (File.Exists(p.Clip.Path))
                         Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(p.Clip.Path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
                     try { string t = ThumbPath(p.Clip); if (File.Exists(t)) File.Delete(t); } catch { }
+                    HoverPreview.Forget(p.Clip);
                     pending.RemoveAt(i); pendingPaths.Remove(p.Clip.Path);
                 }
                 catch (Exception ex)
@@ -219,9 +223,26 @@ namespace Clutch
         static readonly Queue<Clip> work = new Queue<Clip>();
         static Thread worker;
 
-        public static string ThumbPath(Clip c)
+        public static string ThumbPath(Clip c) { return ThumbPath(c.Path, c.Size); }
+        public static string ThumbPath(string path, long size)
         {
-            return System.IO.Path.Combine(Paths.Thumbs, ((uint)c.Path.ToLowerInvariant().GetHashCode()).ToString("x8") + "_" + c.Size + ".jpg");
+            return System.IO.Path.Combine(Paths.Thumbs, ((uint)path.ToLowerInvariant().GetHashCode()).ToString("x8") + "_" + size + ".jpg");
+        }
+
+        public static void Remember(Dictionary<string, string> games, Dictionary<string, string> renamed)
+        {
+            if (renamed != null)
+                foreach (KeyValuePair<string, string> kv in renamed)
+                {
+                    ClipMeta m; if (meta.TryGetValue(kv.Key, out m)) meta[kv.Value] = m;
+                }
+            if (games != null)
+                foreach (KeyValuePair<string, string> kv in games)
+                {
+                    ClipMeta m; if (!meta.TryGetValue(kv.Key, out m)) { m = new ClipMeta(); meta[kv.Key] = m; }
+                    if (kv.Value.Length > 0) m.Game = kv.Value;
+                }
+            Rescan(); Save();
         }
 
         public static Bitmap LoadImage(string file)
